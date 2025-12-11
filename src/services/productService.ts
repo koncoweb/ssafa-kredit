@@ -78,7 +78,11 @@ export async function getCreditSettings(): Promise<CreditSettings> {
   // Default settings
   return {
     globalMarkupPercentage: 10, // Default 10%
-    defaultTenor: 12
+    defaultTenor: 12,
+    availableTenors: {
+      weekly: [4, 8, 12, 16],
+      monthly: [3, 6, 9, 12]
+    }
   };
 }
 
@@ -101,10 +105,10 @@ export function calculateCreditPrice(
 export function calculateInstallment(
   creditPrice: number, 
   dp: number, 
-  tenorMonths: number
+  tenorCount: number
 ): number {
   const principal = creditPrice - dp;
   if (principal <= 0) return 0;
-  if (tenorMonths <= 0) return principal;
-  return principal / tenorMonths;
+  if (tenorCount <= 0) return principal;
+  return principal / tenorCount;
 }

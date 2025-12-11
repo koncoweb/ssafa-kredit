@@ -35,6 +35,9 @@ export interface Product {
   imageUrl?: string;
   stock: number;
   active: boolean;
+  minCreditPurchase?: number;
+  creditRequirements?: string;
+  expiryDate?: string;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -42,4 +45,8 @@ export interface Product {
 export interface CreditSettings {
   globalMarkupPercentage: number;
   defaultTenor?: number;
+  availableTenors: {
+    weekly: number[];
+    monthly: number[];
+  };
 }

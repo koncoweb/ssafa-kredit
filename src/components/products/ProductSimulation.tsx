@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { Text, TextInput, Surface, Divider, Button } from 'react-native-paper';
+import { Text, TextInput, Surface, Divider, SegmentedButtons, Chip } from 'react-native-paper';
 import { Product, CreditSettings } from '../../types';
 import { calculateCreditPrice, calculateInstallment } from '../../services/productService';
 
@@ -11,13 +11,26 @@ interface ProductSimulationProps {
 
 export default function ProductSimulation({ product, globalSettings }: ProductSimulationProps) {
   const [dp, setDp] = useState('');
-  const [tenor, setTenor] = useState(globalSettings.defaultTenor?.toString() || '12');
+  const [installType, setInstallType] = useState('monthly'); // 'monthly' | 'weekly'
+  const [selectedTenor, setSelectedTenor] = useState<number>(0);
   
   const creditPrice = calculateCreditPrice(product.priceCash, product.markupPercentage, globalSettings.globalMarkupPercentage);
-  
   const dpValue = parseFloat(dp) || 0;
-  const tenorValue = parseInt(tenor) || 12;
-  const installment = calculateInstallment(creditPrice, dpValue, tenorValue);
+
+  // Available Tenors based on Settings or Default
+  const weeklyTenors = globalSettings.availableTenors?.weekly || [4, 8, 12, 16];
+  const monthlyTenors = globalSettings.availableTenors?.monthly || [3, 6, 9, 12];
+  
+  const currentTenors = installType === 'weekly' ? weeklyTenors : monthlyTenors;
+
+  // Set default tenor if not selected
+  React.useEffect(() => {
+      if (!currentTenors.includes(selectedTenor)) {
+          setSelectedTenor(currentTenors[0]);
+      }
+  }, [installType]);
+
+  const installment = calculateInstallment(creditPrice, dpValue, selectedTenor);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(val);
@@ -49,21 +62,38 @@ export default function ProductSimulation({ product, globalSettings }: ProductSi
         left={<TextInput.Affix text="Rp " />}
       />
 
-      <TextInput
-        label="Tenor (Bulan)"
-        value={tenor}
-        onChangeText={setTenor}
-        keyboardType="numeric"
-        mode="outlined"
-        style={styles.input}
+      <Text variant="labelMedium" style={{marginBottom: 8}}>Pilih Tipe Cicilan</Text>
+      <SegmentedButtons
+        value={installType}
+        onValueChange={setInstallType}
+        buttons={[
+          { value: 'weekly', label: 'Mingguan' },
+          { value: 'monthly', label: 'Bulanan' },
+        ]}
+        style={{marginBottom: 16}}
       />
+
+      <Text variant="labelMedium" style={{marginBottom: 8}}>Pilih Tenor ({installType === 'weekly' ? 'Minggu' : 'Bulan'})</Text>
+      <View style={styles.chipRow}>
+          {currentTenors.map(t => (
+              <Chip 
+                key={t} 
+                selected={selectedTenor === t} 
+                onPress={() => setSelectedTenor(t)}
+                style={styles.chip}
+                showSelectedOverlay
+              >
+                  {t}x
+              </Chip>
+          ))}
+      </View>
 
       <Divider style={styles.divider} />
 
       <View style={styles.result}>
-        <Text variant="bodyLarge">Angsuran per Bulan:</Text>
+        <Text variant="bodyLarge">Angsuran per {installType === 'weekly' ? 'Minggu' : 'Bulan'}:</Text>
         <Text variant="headlineSmall" style={styles.installment}>{formatCurrency(installment)}</Text>
-        <Text variant="bodySmall" style={{color:'#757575'}}>x {tenorValue} bulan</Text>
+        <Text variant="bodySmall" style={{color:'#757575'}}>x {selectedTenor} kali bayar</Text>
       </View>
     </Surface>
   );
@@ -100,5 +130,14 @@ const styles = StyleSheet.create({
     color: '#1E88E5',
     fontWeight: 'bold',
     marginVertical: 4
+  },
+  chipRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 8
+  },
+  chip: {
+      marginBottom: 8
   }
 });

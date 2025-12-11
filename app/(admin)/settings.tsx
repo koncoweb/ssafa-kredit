@@ -13,10 +13,19 @@ export default function SettingsPage() {
   const [fixing, setFixing] = useState(false);
   
   // Credit Settings State
-  const [creditSettings, setCreditSettings] = useState({ globalMarkupPercentage: 10, defaultTenor: 12 });
+  const [creditSettings, setCreditSettings] = useState({ 
+    globalMarkupPercentage: 10, 
+    defaultTenor: 12,
+    availableTenors: {
+      weekly: [4, 8, 12, 16],
+      monthly: [3, 6, 9, 12]
+    }
+  });
   const [loadingSettings, setLoadingSettings] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [tempMarkup, setTempMarkup] = useState('');
+  const [tempWeekly, setTempWeekly] = useState('');
+  const [tempMonthly, setTempMonthly] = useState('');
 
   useEffect(() => {
     checkRole();
@@ -38,7 +47,11 @@ export default function SettingsPage() {
         const settings = await getCreditSettings();
         setCreditSettings({
             globalMarkupPercentage: settings.globalMarkupPercentage ?? 10,
-            defaultTenor: settings.defaultTenor ?? 12
+            defaultTenor: settings.defaultTenor ?? 12,
+            availableTenors: settings.availableTenors ?? {
+                weekly: [4, 8, 12, 16],
+                monthly: [3, 6, 9, 12]
+            }
         });
     } catch(e) { console.error(e); }
   };
@@ -48,7 +61,11 @@ export default function SettingsPage() {
         setLoadingSettings(true);
         await saveCreditSettings({
             ...creditSettings,
-            globalMarkupPercentage: parseFloat(tempMarkup) || 0
+            globalMarkupPercentage: parseFloat(tempMarkup) || 0,
+            availableTenors: {
+                weekly: tempWeekly.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0),
+                monthly: tempMonthly.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0)
+            }
         });
         await loadCreditSettings();
         setShowSettingsDialog(false);
@@ -108,51 +125,62 @@ export default function SettingsPage() {
 
         <List.Section title="Pengaturan Bisnis">
             <List.Item
-                title="Keuntungan Kredit (Global)"
-                description={`Markup saat ini: ${creditSettings.globalMarkupPercentage}%`}
+                title="Global Markup Kredit"
+                description={`${creditSettings.globalMarkupPercentage}%`}
                 left={props => <List.Icon {...props} icon="percent" />}
-                right={props => <Button onPress={() => { setTempMarkup(creditSettings.globalMarkupPercentage.toString()); setShowSettingsDialog(true); }}>Ubah</Button>}
+                onPress={() => {
+                    setTempMarkup(creditSettings.globalMarkupPercentage.toString());
+                    setTempWeekly(creditSettings.availableTenors?.weekly?.join(', ') || '4, 8, 12, 16');
+                    setTempMonthly(creditSettings.availableTenors?.monthly?.join(', ') || '3, 6, 9, 12');
+                    setShowSettingsDialog(true);
+                }}
             />
         </List.Section>
 
-        <Divider />
+        <Portal>
+            <Dialog visible={showSettingsDialog} onDismiss={() => setShowSettingsDialog(false)}>
+                <Dialog.Title>Edit Pengaturan Kredit</Dialog.Title>
+                <Dialog.Content>
+                    <TextInput
+                        label="Markup Global (%)"
+                        value={tempMarkup}
+                        onChangeText={setTempMarkup}
+                        keyboardType="numeric"
+                        mode="outlined"
+                        style={{marginBottom: 16}}
+                    />
+                    <TextInput
+                        label="Pilihan Tenor Mingguan (pisahkan koma)"
+                        value={tempWeekly}
+                        onChangeText={setTempWeekly}
+                        mode="outlined"
+                        placeholder="Contoh: 4, 8, 12, 16"
+                        style={{marginBottom: 16}}
+                    />
+                    <TextInput
+                        label="Pilihan Tenor Bulanan (pisahkan koma)"
+                        value={tempMonthly}
+                        onChangeText={setTempMonthly}
+                        mode="outlined"
+                        placeholder="Contoh: 3, 6, 9, 12"
+                    />
+                </Dialog.Content>
+                <Dialog.Actions>
+                    <Button onPress={() => setShowSettingsDialog(false)}>Batal</Button>
+                    <Button onPress={handleSaveSettings} loading={loadingSettings}>Simpan</Button>
+                </Dialog.Actions>
+            </Dialog>
+        </Portal>
 
-        <List.Section title="Aplikasi">
+        <List.Section title="Sesi">
           <List.Item
-            title="Versi Aplikasi"
-            description="1.0.0 (Beta)"
-            left={props => <List.Icon {...props} icon="information" />}
+            title="Keluar"
+            left={props => <List.Icon {...props} icon="logout" />}
+            onPress={handleLogout}
+            titleStyle={{ color: 'red' }}
           />
         </List.Section>
-
-        <View style={{ marginTop: 20 }}>
-          <Button mode="contained" buttonColor="#FF5252" icon="logout" onPress={handleLogout}>
-            Keluar Aplikasi
-          </Button>
-        </View>
       </ScrollView>
-
-      <Portal>
-        <Dialog visible={showSettingsDialog} onDismiss={() => setShowSettingsDialog(false)}>
-            <Dialog.Title>Atur Keuntungan Global</Dialog.Title>
-            <Dialog.Content>
-                <TextInput
-                    label="Persentase Markup (%)"
-                    value={tempMarkup}
-                    onChangeText={setTempMarkup}
-                    keyboardType="numeric"
-                    mode="outlined"
-                />
-                <Text variant="bodySmall" style={{marginTop: 5, color: '#757575'}}>
-                    Contoh: 10 berarti harga kredit = harga cash + 10%
-                </Text>
-            </Dialog.Content>
-            <Dialog.Actions>
-                <Button onPress={() => setShowSettingsDialog(false)}>Batal</Button>
-                <Button onPress={handleSaveSettings} loading={loadingSettings}>Simpan</Button>
-            </Dialog.Actions>
-        </Dialog>
-      </Portal>
     </View>
   );
 }
