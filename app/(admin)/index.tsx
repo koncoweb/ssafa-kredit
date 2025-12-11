@@ -75,6 +75,7 @@ export default function AdminDashboard() {
         <Text variant="titleMedium" style={styles.sectionTitle}>Menu Cepat</Text>
 
         <View style={styles.menuGrid}>
+          <Button mode="contained" icon="shopping" style={styles.menuBtn} onPress={() => router.push('/(admin)/products/' as any)}>Manajemen Produk</Button>
           <Button mode="contained" icon="account-plus" style={styles.menuBtn} onPress={() => router.push('/(admin)/employees')}>Kelola Karyawan</Button>
           <Button mode="contained" icon="account-group" style={styles.menuBtn} onPress={() => router.push('/(admin)/customers')}>Kelola Nasabah</Button>
           <Button mode="contained" icon="credit-card-plus" style={styles.menuBtn} onPress={() => router.push({ pathname: '/(admin)/transaction', params: { mode: 'credit' } })}>Tambah Kredit</Button>

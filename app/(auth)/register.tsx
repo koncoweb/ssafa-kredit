@@ -6,6 +6,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { UserRole } from '../../src/types';
 
 export default function RegisterScreen() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserRole>('customer');
@@ -17,12 +18,12 @@ export default function RegisterScreen() {
   const handleRegister = async () => {
     try {
       setError(null);
-      if (!email || !password) {
-        setError('Email dan password wajib diisi');
+      if (!name || !email || !password) {
+        setError('Nama, Email, dan Password wajib diisi');
         return;
       }
       setLoading(true);
-      await registerEmail(email.trim(), password, role);
+      await registerEmail(email.trim(), password, role, name.trim());
       router.replace('/');
     } catch (e: any) {
       setError(e?.message || 'Registrasi gagal');
@@ -38,6 +39,14 @@ export default function RegisterScreen() {
           <Image source={require('../../assets/images/icon.png')} style={styles.logo} />
           <Text variant="headlineMedium" style={styles.title}>Daftar Akun</Text>
           <Text variant="bodyMedium" style={styles.subtitle}>Buat akun baru untuk Ssafa Kredit</Text>
+
+          <TextInput
+            label="Nama Lengkap"
+            value={name}
+            onChangeText={setName}
+            mode="outlined"
+            style={styles.input}
+          />
 
           <TextInput
             label="Email"

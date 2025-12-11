@@ -57,6 +57,10 @@ export default function CustomerDashboard() {
           </Card.Content>
         </Card>
 
+        <Card style={{ marginTop: 20 }} mode="outlined" onPress={() => router.push('/(customer)/products' as any)}>
+          <Card.Title title="Katalog Produk" subtitle="Lihat produk dan simulasi kredit" left={props => <List.Icon {...props} icon="shopping" />} />
+        </Card>
+
         <Text variant="titleMedium" style={{ marginTop: 20, marginBottom: 10, color: '#333' }}>Riwayat Transaksi</Text>
         <Card>
           {transactions.length > 0 ? (

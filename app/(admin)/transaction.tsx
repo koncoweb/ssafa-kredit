@@ -1,10 +1,130 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, View, Alert, TouchableOpacity } from 'react-native';
-import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, RadioButton, SegmentedButtons, ActivityIndicator } from 'react-native-paper';
+import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, SegmentedButtons, ActivityIndicator } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-// import { GradientBackground } from '../../src/components/GradientBackground'; // Removed dark background
 import { getAllCustomers, processTransaction, getCustomerTransactions, CustomerData, Transaction } from '../../src/services/firestore';
 import { useAuthStore } from '../../src/store/authStore';
+
+// Helper function
+const formatCurrency = (val: number) => {
+  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
+};
+
+// --- Sub-components ---
+
+interface TransactionHistoryListProps {
+  transactions: Transaction[];
+  loading: boolean;
+}
+
+const TransactionHistoryList: React.FC<TransactionHistoryListProps> = ({ transactions, loading }) => {
+  if (loading) {
+    return (
+      <View>
+        <Text variant="titleSmall" style={{ marginBottom: 8, color: '#666' }}>Riwayat Terakhir:</Text>
+        <ActivityIndicator size="small" />
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <Text variant="titleSmall" style={{ marginBottom: 8, color: '#666' }}>Riwayat Terakhir:</Text>
+      {transactions.length > 0 ? (
+        transactions.slice(0, 3).map((tx, idx) => (
+          <View key={tx.id || idx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+            <Text variant="bodySmall" style={{ color: '#888' }}>
+              {tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('id-ID') : 'Baru saja'}
+            </Text>
+            <Text variant="bodySmall" style={{ color: tx.type === 'credit' ? '#D32F2F' : '#388E3C', fontWeight: 'bold' }}>
+              {tx.type === 'credit' ? '+' : '-'}{formatCurrency(tx.amount)}
+            </Text>
+          </View>
+        ))
+      ) : (
+        <Text variant="bodySmall" style={{ fontStyle: 'italic', color: '#999' }}>Belum ada riwayat transaksi</Text>
+      )}
+    </View>
+  );
+};
+
+interface CustomerDetailViewProps {
+  customer: CustomerData;
+  onChange: () => void;
+  loadingHistory: boolean;
+  lastTransactions: Transaction[];
+}
+
+const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ 
+  customer, 
+  onChange, 
+  loadingHistory, 
+  lastTransactions 
+}) => {
+  return (
+    <View>
+      <View>
+        <Text variant="headlineSmall" style={{ color: '#1E88E5', fontWeight: 'bold' }}>{customer.name}</Text>
+        <Text variant="bodyMedium">Email: {customer.email}</Text>
+        <Text variant="bodyMedium">Limit Kredit: {formatCurrency(customer.creditLimit)}</Text>
+        <Text variant="bodyMedium" style={{ color: customer.currentDebt > 0 ? '#F44336' : '#4CAF50' }}>
+          Utang Saat Ini: {formatCurrency(customer.currentDebt)}
+        </Text>
+      </View>
+
+      <Button mode="text" onPress={onChange} style={{ marginTop: 10 }}>
+        Ganti Nasabah
+      </Button>
+
+      <Divider style={{ marginVertical: 15 }} />
+
+      <TransactionHistoryList transactions={lastTransactions} loading={loadingHistory} />
+    </View>
+  );
+};
+
+interface EstimationViewProps {
+  customer: CustomerData;
+  amount: string;
+  mode: string;
+}
+
+const EstimationView: React.FC<EstimationViewProps> = ({ customer, amount, mode }) => {
+  const parsedAmount = parseInt(amount);
+  if (!customer || !amount || isNaN(parsedAmount) || parsedAmount <= 0) {
+    return null;
+  }
+
+  const isCredit = mode === 'credit';
+  const newDebt = isCredit 
+    ? (customer.currentDebt || 0) + parsedAmount
+    : (customer.currentDebt || 0) - parsedAmount;
+  
+  const isLimitExceeded = isCredit && (customer.creditLimit || 0) > 0 && newDebt > (customer.creditLimit || 0);
+  const remainingLimit = (customer.creditLimit || 0) - newDebt;
+
+  return (
+    <View style={{ marginBottom: 20, paddingHorizontal: 5 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
+        <Text variant="bodySmall" style={{ color: '#666' }}>
+          {isCredit ? 'Estimasi Total Utang Baru: ' : 'Estimasi Sisa Utang: '}
+        </Text>
+        <Text variant="bodySmall" style={{ fontWeight: 'bold', color: isCredit ? '#D32F2F' : '#388E3C' }}>
+          {formatCurrency(newDebt)}
+        </Text>
+      </View>
+      {isCredit && (customer.creditLimit || 0) > 0 && (
+        <View style={{ marginTop: 4 }}>
+          <Text variant="bodySmall" style={{ color: isLimitExceeded ? '#D32F2F' : '#666' }}>
+            Sisa Limit: {formatCurrency(remainingLimit)}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+};
+
+// --- Main Component ---
 
 export default function TransactionScreen() {
   const router = useRouter();
@@ -40,8 +160,6 @@ export default function TransactionScreen() {
     loadCustomers();
   }, []);
 
-  console.log('Render TransactionScreen. Loading:', loading, 'DialogVisible:', dialogVisible);
-
   const loadCustomers = async () => {
     try {
       const data = await getAllCustomers();
@@ -50,10 +168,6 @@ export default function TransactionScreen() {
       console.error(error);
       Alert.alert('Error', 'Gagal memuat data nasabah');
     }
-  };
-
-  const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
   };
 
   const handleAmountChange = (text: string) => {
@@ -108,8 +222,7 @@ export default function TransactionScreen() {
     }
     
     const parsedAmount = parseInt(amount);
-    console.log('Amount:', amount, 'Parsed:', parsedAmount);
-
+    
     if (!amount || isNaN(parsedAmount) || parsedAmount <= 0) {
       showError('Jumlah Tidak Valid', 'Masukkan jumlah uang yang valid (hanya angka dan lebih dari 0).', 'numeric-off');
       return;
@@ -136,14 +249,12 @@ export default function TransactionScreen() {
     }
 
     if (!user?.id) {
-      console.log('User session missing');
       showError('Sesi Berakhir', 'Sesi login Anda tidak valid. Silakan logout dan login kembali.', 'account-key');
       return;
     }
 
     setLoading(true);
     try {
-      console.log('Calling processTransaction...');
       const txId = await processTransaction({
         customerId: selectedCustomer.uid,
         amount: parsedAmount,
@@ -151,9 +262,8 @@ export default function TransactionScreen() {
         description: description || (mode === 'credit' ? 'Tambah Kredit' : 'Pembayaran Utang'),
         employeeId: user.id
       });
-      console.log('processTransaction finished, ID:', txId);
 
-      // Update local state to reflect changes immediately
+      // Update local state
       if (selectedCustomer) {
         const newDebt = mode === 'credit' 
           ? (selectedCustomer.currentDebt || 0) + parsedAmount
@@ -164,61 +274,39 @@ export default function TransactionScreen() {
           currentDebt: newDebt
         });
 
-        // Update in the customers list as well so if they search again it's updated
         setCustomers(prev => prev.map(c => 
           c.uid === selectedCustomer.uid 
             ? { ...c, currentDebt: newDebt }
             : c
         ));
 
-        // Update Last Transactions History locally
         const newTx: Transaction = {
           id: txId,
           customerId: selectedCustomer.uid,
           amount: parsedAmount,
           type: mode as 'credit' | 'payment',
           description: description || (mode === 'credit' ? 'Tambah Kredit' : 'Pembayaran Utang'),
-          createdAt: { toDate: () => new Date() }, // Mock timestamp for immediate display
+          createdAt: { toDate: () => new Date() },
           employeeId: user.id
         };
         setLastTransactions(prev => [newTx, ...prev]);
       }
 
-      // Reset form
       setAmount('');
       setDisplayAmount('');
       setDescription('');
-
-      console.log('Transaction completed successfully in Firestore. ID:', txId);
       
-      // Stop loading immediately
       setLoading(false);
-
-      // Show Success Dialog
       setSuccessVisible(true);
 
     } catch (error: any) {
-      console.error('Transaction failed with error:', error);
-      setLoading(false); // Stop loading on error
-      
+      setLoading(false);
       if (error.message?.includes('Melebihi limit kredit')) {
-        showError(
-          'Limit Kredit Terlampaui',
-          error.message,
-          'hand-coin',
-          '#C62828'
-        );
+        showError('Limit Kredit Terlampaui', error.message, 'hand-coin', '#C62828');
       } else {
-        showError(
-          'Transaksi Gagal', 
-          `Terjadi kesalahan saat menyimpan data:\n${error.message}\n\nPastikan koneksi internet lancar dan Anda memiliki izin akses.`,
-          'wifi-off'
-        );
+        showError('Transaksi Gagal', `Terjadi kesalahan: ${error.message}`, 'wifi-off');
       }
     }
-    // Remove finally block to avoid redundant state updates if handled above, 
-    // or keep it just for safety but ensure logic flow is correct.
-    // In this case, we handled setLoading(false) in both try and catch blocks explicitly.
   };
 
   return (
@@ -244,56 +332,12 @@ export default function TransactionScreen() {
             <Text variant="titleMedium" style={{ marginBottom: 10 }}>Pilih Nasabah</Text>
             <View>
               {selectedCustomer ? (
-                <View>
-                  <View>
-                    <Text variant="headlineSmall" style={{ color: '#1E88E5', fontWeight: 'bold' }}>
-                      {selectedCustomer.name}
-                    </Text>
-                    <Text variant="bodyMedium">
-                      Email: {selectedCustomer.email}
-                    </Text>
-                    <Text variant="bodyMedium">
-                      Limit Kredit: {formatCurrency(selectedCustomer.creditLimit)}
-                    </Text>
-                    <Text variant="bodyMedium" style={{ color: selectedCustomer.currentDebt > 0 ? '#F44336' : '#4CAF50' }}>
-                      Utang Saat Ini: {formatCurrency(selectedCustomer.currentDebt)}
-                    </Text>
-                  </View>
-
-                  <Button mode="text" onPress={() => setDialogVisible(true)} style={{ marginTop: 10 }}>
-                    Ganti Nasabah
-                  </Button>
-
-                  <View style={{ height: 1, backgroundColor: '#e0e0e0', marginVertical: 15 }} />
-
-                  <View>
-                    <Text variant="titleSmall" style={{ marginBottom: 8, color: '#666' }}>
-                      Riwayat Terakhir:
-                    </Text>
-                    {loadingHistory ? (
-                      <ActivityIndicator size="small" />
-                    ) : (
-                      <View>
-                        {lastTransactions.length > 0 ? (
-                          lastTransactions.slice(0, 3).map((tx, idx) => (
-                            <View key={tx.id || idx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                              <Text variant="bodySmall" style={{ color: '#888' }}>
-                                {tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('id-ID') : 'Baru saja'}
-                              </Text>
-                              <Text variant="bodySmall" style={{ color: tx.type === 'credit' ? '#D32F2F' : '#388E3C', fontWeight: 'bold' }}>
-                                {tx.type === 'credit' ? '+' : ''}{tx.type === 'payment' ? '-' : ''}{formatCurrency(tx.amount)}
-                              </Text>
-                            </View>
-                          ))
-                        ) : (
-                          <Text variant="bodySmall" style={{ fontStyle: 'italic', color: '#999' }}>
-                            Belum ada riwayat transaksi
-                          </Text>
-                        )}
-                      </View>
-                    )}
-                  </View>
-                </View>
+                <CustomerDetailView 
+                  customer={selectedCustomer} 
+                  onChange={() => setDialogVisible(true)}
+                  loadingHistory={loadingHistory}
+                  lastTransactions={lastTransactions}
+                />
               ) : (
                 <Button mode="outlined" onPress={() => setDialogVisible(true)} icon="magnify">
                   Cari Nasabah
@@ -313,31 +357,9 @@ export default function TransactionScreen() {
           left={<TextInput.Icon icon="cash" />}
         />
         
-        <View>
-          {selectedCustomer && amount && parseInt(amount) > 0 && (
-            <View style={{ marginBottom: 20, paddingHorizontal: 5 }}>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
-                <Text variant="bodySmall" style={{ color: '#666' }}>
-                  {mode === 'credit' ? 'Estimasi Total Utang Baru: ' : 'Estimasi Sisa Utang: '}
-                </Text>
-                <Text variant="bodySmall" style={{ fontWeight: 'bold', color: mode === 'credit' ? '#D32F2F' : '#388E3C' }}>
-                  {formatCurrency(
-                    mode === 'credit' 
-                      ? (selectedCustomer.currentDebt || 0) + parseInt(amount)
-                      : (selectedCustomer.currentDebt || 0) - parseInt(amount)
-                  )}
-                </Text>
-              </View>
-              {mode === 'credit' && (selectedCustomer.creditLimit || 0) > 0 && (
-                <View style={{ marginTop: 4 }}>
-                  <Text variant="bodySmall" style={{ color: ((selectedCustomer.currentDebt || 0) + parseInt(amount)) > (selectedCustomer.creditLimit || 0) ? '#D32F2F' : '#666' }}>
-                    Sisa Limit: {formatCurrency((selectedCustomer.creditLimit || 0) - ((selectedCustomer.currentDebt || 0) + parseInt(amount)))}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-        </View>
+        {selectedCustomer && (
+          <EstimationView customer={selectedCustomer} amount={amount} mode={mode} />
+        )}
 
         <TextInput
           label="Keterangan (Opsional)"
@@ -351,10 +373,7 @@ export default function TransactionScreen() {
 
         <Button 
           mode="contained" 
-          onPress={() => {
-            console.log('Button Pressed! Calling handleSubmit...');
-            handleSubmit();
-          }} 
+          onPress={handleSubmit} 
           loading={loading}
           disabled={loading}
           style={{ paddingVertical: 5, borderRadius: 8, backgroundColor: mode === 'credit' ? '#D32F2F' : '#388E3C' }}
@@ -408,18 +427,10 @@ export default function TransactionScreen() {
             </Text>
           </Dialog.Content>
           <Dialog.Actions style={{ justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 20 }}>
-            <Button 
-              onPress={() => router.back()} 
-              mode="outlined"
-              textColor="#757575"
-            >
+            <Button onPress={() => router.back()} mode="outlined" textColor="#757575">
               Kembali
             </Button>
-            <Button 
-              onPress={() => setSuccessVisible(false)} 
-              mode="contained"
-              buttonColor="#4CAF50"
-            >
+            <Button onPress={() => setSuccessVisible(false)} mode="contained" buttonColor="#4CAF50">
               Transaksi Baru
             </Button>
           </Dialog.Actions>
@@ -432,17 +443,10 @@ export default function TransactionScreen() {
           <Dialog.Icon icon={errorIcon} size={50} color={errorColor} />
           <Dialog.Title style={{ textAlign: 'center', color: errorColor }}>{errorTitle}</Dialog.Title>
           <Dialog.Content>
-            <Text variant="bodyMedium" style={{ textAlign: 'center' }}>
-              {errorMessage}
-            </Text>
+            <Text variant="bodyMedium" style={{ textAlign: 'center' }}>{errorMessage}</Text>
           </Dialog.Content>
           <Dialog.Actions style={{ justifyContent: 'center', paddingBottom: 20 }}>
-            <Button 
-              onPress={() => setErrorVisible(false)} 
-              mode="contained"
-              buttonColor={errorColor}
-              style={{ minWidth: 100 }}
-            >
+            <Button onPress={() => setErrorVisible(false)} mode="contained" buttonColor={errorColor} style={{ minWidth: 100 }}>
               Mengerti
             </Button>
           </Dialog.Actions>

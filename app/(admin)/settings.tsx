@@ -1,19 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, View, Alert } from 'react-native';
-import { Appbar, List, Button, Text, Divider, ActivityIndicator } from 'react-native-paper';
+import { Appbar, List, Button, Text, Divider, ActivityIndicator, Portal, Dialog, TextInput } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
-// import { GradientBackground } from '../../src/components/GradientBackground';
 import { getUserRole, setUserRole } from '../../src/services/firestore';
+import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
 
 export default function SettingsPage() {
   const router = useRouter();
   const { user, logout } = useAuthStore();
   const [roleStatus, setRoleStatus] = useState<string>('checking');
   const [fixing, setFixing] = useState(false);
+  
+  // Credit Settings State
+  const [creditSettings, setCreditSettings] = useState({ globalMarkupPercentage: 10, defaultTenor: 12 });
+  const [loadingSettings, setLoadingSettings] = useState(false);
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+  const [tempMarkup, setTempMarkup] = useState('');
 
   useEffect(() => {
     checkRole();
+    loadCreditSettings();
   }, []);
 
   const checkRole = async () => {
@@ -26,12 +33,37 @@ export default function SettingsPage() {
     }
   };
 
+  const loadCreditSettings = async () => {
+    try {
+        const settings = await getCreditSettings();
+        setCreditSettings({
+            globalMarkupPercentage: settings.globalMarkupPercentage ?? 10,
+            defaultTenor: settings.defaultTenor ?? 12
+        });
+    } catch(e) { console.error(e); }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+        setLoadingSettings(true);
+        await saveCreditSettings({
+            ...creditSettings,
+            globalMarkupPercentage: parseFloat(tempMarkup) || 0
+        });
+        await loadCreditSettings();
+        setShowSettingsDialog(false);
+        Alert.alert('Sukses', 'Pengaturan kredit disimpan');
+    } catch(e) {
+        Alert.alert('Gagal', 'Gagal menyimpan pengaturan');
+    } finally {
+        setLoadingSettings(false);
+    }
+  };
+
   const fixAdminRole = async () => {
     if (!user?.id) return;
     setFixing(true);
     try {
-      // Force set role to admin for the current user (Self-repair)
-      // This works because rules allow users to write to their own doc
       await setUserRole(user.id, 'admin');
       Alert.alert('Sukses', 'Akun Anda sekarang terdaftar sebagai Admin di database.');
       checkRole();
@@ -62,12 +94,7 @@ export default function SettingsPage() {
           />
           <List.Item
             title="Status Database"
-            description={
-              roleStatus === 'checking' ? 'Memeriksa...' :
-              roleStatus === 'admin' ? 'Terverifikasi (Admin)' :
-              roleStatus === 'not_found' ? 'Data Hilang (Perlu Perbaikan)' :
-              `Role: ${roleStatus}`
-            }
+            description={roleStatus}
             left={props => <List.Icon {...props} icon="database-check" />}
             right={props => roleStatus !== 'admin' && roleStatus !== 'checking' ? (
               <Button mode="contained-tonal" compact onPress={fixAdminRole} loading={fixing}>
@@ -75,6 +102,17 @@ export default function SettingsPage() {
               </Button>
             ) : null}
           />
+        </List.Section>
+
+        <Divider />
+
+        <List.Section title="Pengaturan Bisnis">
+            <List.Item
+                title="Keuntungan Kredit (Global)"
+                description={`Markup saat ini: ${creditSettings.globalMarkupPercentage}%`}
+                left={props => <List.Icon {...props} icon="percent" />}
+                right={props => <Button onPress={() => { setTempMarkup(creditSettings.globalMarkupPercentage.toString()); setShowSettingsDialog(true); }}>Ubah</Button>}
+            />
         </List.Section>
 
         <Divider />
@@ -93,6 +131,28 @@ export default function SettingsPage() {
           </Button>
         </View>
       </ScrollView>
+
+      <Portal>
+        <Dialog visible={showSettingsDialog} onDismiss={() => setShowSettingsDialog(false)}>
+            <Dialog.Title>Atur Keuntungan Global</Dialog.Title>
+            <Dialog.Content>
+                <TextInput
+                    label="Persentase Markup (%)"
+                    value={tempMarkup}
+                    onChangeText={setTempMarkup}
+                    keyboardType="numeric"
+                    mode="outlined"
+                />
+                <Text variant="bodySmall" style={{marginTop: 5, color: '#757575'}}>
+                    Contoh: 10 berarti harga kredit = harga cash + 10%
+                </Text>
+            </Dialog.Content>
+            <Dialog.Actions>
+                <Button onPress={() => setShowSettingsDialog(false)}>Batal</Button>
+                <Button onPress={handleSaveSettings} loading={loadingSettings}>Simpan</Button>
+            </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }

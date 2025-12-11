@@ -37,7 +37,12 @@ service cloud.firestore {
       );
       
       // Only Admin/Employee can manage customer profiles
-      allow write: if isSignedIn() && ( isAdmin() || isEmployee() );
+      // Customer can create/update their own profile
+      allow write: if isSignedIn() && ( 
+        request.auth.uid == customerId ||
+        isAdmin() || 
+        isEmployee() 
+      );
     }
 
     // Transactions
@@ -56,6 +61,18 @@ service cloud.firestore {
     match /proofs/{docId} {
       allow read: if isSignedIn();
       allow write: if isSignedIn() && ( isAdmin() || isEmployee() );
+    }
+
+    // Products
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && ( isAdmin() || isEmployee() );
+    }
+
+    // Settings
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isAdmin();
     }
   }
 }
