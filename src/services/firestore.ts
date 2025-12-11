@@ -1,0 +1,283 @@
+import { db } from './firebase';
+import { 
+  doc, 
+  getDoc, 
+  setDoc, 
+  addDoc, 
+  collection, 
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  limit,
+  runTransaction,
+  increment
+} from 'firebase/firestore';
+
+export async function setUserRole(uid: string, role: string) {
+  await setDoc(doc(db, 'users', uid), { role }, { merge: true });
+}
+
+export async function getUserRole(uid: string): Promise<string | null> {
+  const snap = await getDoc(doc(db, 'users', uid));
+  return snap.exists() ? (snap.data().role as string) : null;
+}
+
+export async function processTransaction(payload: {
+  customerId: string;
+  amount: number;
+  type: 'credit' | 'payment';
+  description?: string;
+  employeeId?: string;
+}) {
+  const txRef = doc(collection(db, 'transactions'));
+  const customerRef = doc(db, 'customers', payload.customerId);
+  console.log('Running transaction on customer:', payload.customerId);
+
+  await runTransaction(db, async (transaction: any) => {
+    // 1. Get Customer Document
+    console.log('Reading customer doc...');
+    const customerDoc = await transaction.get(customerRef);
+    if (!customerDoc.exists()) {
+      throw new Error("Nasabah tidak ditemukan!");
+    }
+    console.log('Customer found, calculating debt...');
+
+    const currentDebt = customerDoc.data().currentDebt || 0;
+    const creditLimit = customerDoc.data().creditLimit || 0;
+
+    // 2. Calculate New Debt
+    let newDebt = currentDebt;
+    if (payload.type === 'credit') {
+        newDebt += payload.amount;
+        // Check Limit if set (non-zero)
+        if (creditLimit > 0 && newDebt > creditLimit) {
+             throw new Error(`Melebihi limit kredit! (Sisa limit: ${creditLimit - currentDebt})`);
+        }
+    } else {
+        newDebt -= payload.amount;
+    }
+
+    // 3. Create Transaction Document FIRST
+    console.log('Writing transaction...');
+    // Using transaction.set on a new document reference
+    transaction.set(txRef, {
+      ...payload,
+      id: txRef.id,
+      createdAt: serverTimestamp(),
+    });
+
+    // 4. Update Customer Debt SECOND
+    console.log('Updating customer debt...');
+    transaction.update(customerRef, { 
+      currentDebt: newDebt,
+      updatedAt: serverTimestamp()
+    });
+  });
+  
+  console.log('Transaction committed. ID:', txRef.id);
+  return txRef.id;
+}
+
+export async function getTransactionsReport(filters?: {
+  employeeId?: string | null;
+  customerId?: string | null;
+  startDate?: Date;
+  endDate?: Date;
+}) {
+  let constraints: any[] = [orderBy('createdAt', 'desc')];
+  
+  if (filters?.employeeId) {
+    constraints.push(where('employeeId', '==', filters.employeeId));
+  }
+
+  if (filters?.customerId) {
+    constraints.push(where('customerId', '==', filters.customerId));
+  }
+  
+  if (filters?.startDate) {
+    constraints.push(where('createdAt', '>=', filters.startDate));
+  }
+  
+  if (filters?.endDate) {
+    constraints.push(where('createdAt', '<=', filters.endDate));
+  }
+  
+  const q = query(collection(db, 'transactions'), ...constraints);
+  
+  try {
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d: any) => {
+      const data = d.data();
+      return { 
+        id: d.id, 
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || new Date() 
+      };
+    }) as Transaction[];
+  } catch (error) {
+    console.warn("Report query error (Check console for Index Link):", error);
+    return [];
+  }
+}
+
+export interface WATemplates {
+  reminder: string;
+  receipt: string;
+  newCredit: string;
+}
+
+export async function getWATemplates(): Promise<WATemplates> {
+  const snap = await getDoc(doc(db, 'settings', 'whatsapp'));
+  if (snap.exists()) {
+    return snap.data() as WATemplates;
+  }
+  return {
+    reminder: 'Halo {nama}, tagihan Anda sebesar {jumlah} jatuh tempo pada {tanggal}. Mohon segera lakukan pembayaran.',
+    receipt: 'Terima kasih {nama}, pembayaran sebesar {jumlah} telah diterima. Sisa utang: {sisa}.',
+    newCredit: 'Halo {nama}, kredit baru sebesar {jumlah} telah disetujui. Total utang: {total}.'
+  };
+}
+
+export async function saveWATemplates(templates: WATemplates) {
+  await setDoc(doc(db, 'settings', 'whatsapp'), templates, { merge: true });
+}
+
+export interface CustomerData {
+  uid: string;
+  name: string;
+  email: string;
+  role: 'customer';
+  phone?: string;
+  address?: string;
+  creditLimit: number;
+  currentDebt: number;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+export interface Transaction {
+  id: string;
+  customerId: string;
+  amount: number;
+  type: 'credit' | 'payment';
+  description?: string;
+  createdAt: any;
+  employeeId?: string;
+}
+
+export async function getCustomerData(uid: string): Promise<CustomerData | null> {
+  const snap = await getDoc(doc(db, 'customers', uid));
+  if (snap.exists()) {
+    return { uid: snap.id, ...snap.data() } as CustomerData;
+  }
+  return null;
+}
+
+export async function createCustomerProfile(uid: string, data: Partial<CustomerData>) {
+  // 1. Create entry in users collection for RBAC
+  await setDoc(doc(db, 'users', uid), {
+    email: data.email,
+    role: 'customer',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+
+  // 2. Create entry in customers collection
+  await setDoc(doc(db, 'customers', uid), {
+    ...data,
+    currentDebt: data.currentDebt || 0,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function getCustomerTransactions(uid: string) {
+  try {
+    const q = query(
+      collection(db, 'transactions'), 
+      where('customerId', '==', uid),
+      orderBy('createdAt', 'desc'),
+      limit(10)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as Transaction[];
+  } catch (error: any) {
+    console.warn("Firestore query error (requires index?):", error);
+    // Fallback if index missing or other error
+    return [];
+  }
+}
+
+export async function getAllCustomers() {
+  const q = query(collection(db, 'customers'));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d: any) => ({ uid: d.id, ...d.data() })) as CustomerData[];
+}
+
+export interface EmployeeData {
+  uid: string;
+  name: string;
+  email: string;
+  role: 'employee';
+  phone?: string;
+  target: number;
+  collected: number;
+  bonus: number;
+  internalDebt: number;
+  active: boolean;
+}
+
+export async function getEmployees() {
+  const q = query(
+    collection(db, 'users'), 
+    where('role', '==', 'employee')
+  );
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d: any) => ({ uid: d.id, ...d.data() })) as EmployeeData[];
+}
+
+export async function updateEmployee(uid: string, data: Partial<EmployeeData>) {
+  await setDoc(doc(db, 'users', uid), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function createEmployeeProfile(uid: string, name: string, email: string) {
+  const initialData: EmployeeData = {
+    uid,
+    name,
+    email,
+    role: 'employee',
+    target: 0,
+    collected: 0,
+    bonus: 0,
+    internalDebt: 0,
+    active: true
+  };
+  // Save to users collection
+  await setDoc(doc(db, 'users', uid), {
+    ...initialData,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function getAdminStats() {
+  // Simple client-side count for MVP
+  const customersSnap = await getDocs(collection(db, 'customers'));
+  const customersCount = customersSnap.size;
+
+  // For total receivables, we'd need to sum up currentDebt from all customers
+  let totalDebt = 0;
+  customersSnap.forEach((doc: any) => {
+    const data = doc.data();
+    totalDebt += (data.currentDebt || 0);
+  });
+
+  return {
+    customersCount,
+    totalDebt
+  };
+}
