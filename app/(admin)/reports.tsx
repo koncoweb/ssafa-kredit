@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, View, StyleSheet, Alert, RefreshControl } from 'react-native';
-import { Appbar, Text, Card, List, Button, Menu, Divider, ActivityIndicator, Chip, Avatar } from 'react-native-paper';
+import { ScrollView, View, StyleSheet, Alert, RefreshControl, TouchableOpacity } from 'react-native';
+import { Appbar, Text, Card, List, Button, Menu, Divider, ActivityIndicator, Chip, Avatar, ProgressBar, Badge } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 // import { GradientBackground } from '../../src/components/GradientBackground';
-import { getTransactionsReport, getEmployees, EmployeeData, Transaction } from '../../src/services/firestore';
+import { getCreditTransactionsReport, getReceivablesMutationReport } from '../../src/services/transactionService';
+import { getAllCustomers, CustomerData } from '../../src/services/firestore';
+import { CreditTransaction } from '../../src/types';
 
 export default function ReportsScreen() {
   const router = useRouter();
@@ -13,12 +15,14 @@ export default function ReportsScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [employees, setEmployees] = useState<EmployeeData[]>([]);
+  const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
+  const [mutations, setMutations] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<CustomerData[]>([]);
   
   // Filters
-  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('today');
-  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null); // uid or null for all
+  const [viewMode, setViewMode] = useState<'credits' | 'mutations'>('credits');
+  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('month');
+  const [selectedCustomer, setSelectedCustomer] = useState<string | null>(customerIdParam || null);
   
   // UI State
   const [menuVisible, setMenuVisible] = useState(false);
@@ -30,6 +34,7 @@ export default function ReportsScreen() {
       let startDate: Date | undefined;
       const now = new Date();
       const endDate = new Date(); // now
+      endDate.setHours(23, 59, 59, 999);
 
       if (period === 'today') {
         startDate = new Date(now.setHours(0, 0, 0, 0));
@@ -39,22 +44,34 @@ export default function ReportsScreen() {
         startDate.setHours(0, 0, 0, 0);
       } else if (period === 'month') {
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        startDate.setHours(0, 0, 0, 0);
       }
       // 'all' -> startDate undefined
 
       // 2. Fetch Data
-      const [txData, empData] = await Promise.all([
-        getTransactionsReport({
-          employeeId: selectedEmployee,
-          customerId: customerIdParam || undefined,
-          startDate,
-          endDate
-        }),
-        getEmployees() // Fetch employees for filter dropdown
-      ]);
-
-      setTransactions(txData);
-      setEmployees(empData);
+      if (viewMode === 'credits') {
+        const [txData, custData] = await Promise.all([
+          getCreditTransactionsReport({
+            customerId: selectedCustomer,
+            startDate,
+            endDate
+          }),
+          getAllCustomers()
+        ]);
+        setTransactions(txData);
+        setCustomers(custData);
+      } else {
+        const [mutData, custData] = await Promise.all([
+            getReceivablesMutationReport({
+                customerId: selectedCustomer,
+                startDate,
+                endDate
+            }),
+            getAllCustomers()
+        ]);
+        setMutations(mutData);
+        setCustomers(custData);
+      }
     } catch (error) {
       console.error(error);
       Alert.alert('Error', 'Gagal memuat laporan');
@@ -71,7 +88,7 @@ export default function ReportsScreen() {
 
   useEffect(() => {
     loadData();
-  }, [period, selectedEmployee]);
+  }, [period, selectedCustomer, viewMode]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
@@ -79,34 +96,56 @@ export default function ReportsScreen() {
 
   const formatDate = (date: any) => {
     if (!date) return '-';
-    // If it's a Firestore timestamp (seconds), convert it. 
-    // But getTransactionsReport already converts to Date.
     const d = date instanceof Date ? date : new Date(date);
-    return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
   // Calculate Summary
   const summary = transactions.reduce((acc, curr) => {
-    if (curr.type === 'credit') {
-      acc.totalCredit += curr.amount;
-    } else {
-      acc.totalPayment += curr.amount;
-    }
+    acc.totalCredit += curr.creditPriceTotal;
+    acc.totalPrincipal += curr.principalAmount;
+    acc.count += 1;
     return acc;
-  }, { totalCredit: 0, totalPayment: 0 });
+  }, { totalCredit: 0, totalPrincipal: 0, count: 0 });
 
-  const getEmployeeName = (id?: string) => {
-    if (!id) return 'Admin/System';
-    const emp = employees.find(e => e.uid === id);
-    return emp ? emp.name : 'Unknown';
+  const getCustomerName = (id?: string) => {
+    if (!id) return 'Unknown';
+    const cust = customers.find(c => c.uid === id);
+    return cust ? cust.name : 'Unknown';
+  };
+
+  const getInstallmentProgress = (tx: CreditTransaction) => {
+    const paidCount = tx.installments.filter(i => i.status === 'paid').length;
+    return {
+      paid: paidCount,
+      total: tx.tenorCount,
+      progress: paidCount / tx.tenorCount
+    };
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
       <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
         <Appbar.BackAction onPress={() => router.back()} />
-        <Appbar.Content title={customerNameParam ? `Riwayat: ${customerNameParam}` : "Laporan Piutang"} />
+        <Appbar.Content title={customerNameParam ? `Riwayat: ${customerNameParam}` : "Laporan"} />
       </Appbar.Header>
+
+      <View style={{flexDirection: 'row', padding: 10, backgroundColor: 'white'}}>
+        <Button 
+            mode={viewMode === 'credits' ? 'contained' : 'outlined'} 
+            onPress={() => setViewMode('credits')} 
+            style={{flex:1, marginRight:5}}
+        >
+            Kredit Barang
+        </Button>
+        <Button 
+            mode={viewMode === 'mutations' ? 'contained' : 'outlined'} 
+            onPress={() => setViewMode('mutations')} 
+            style={{flex:1, marginLeft:5}}
+        >
+            Mutasi Piutang
+        </Button>
+      </View>
 
       <View style={styles.filterContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.periodScroll}>
@@ -114,21 +153,25 @@ export default function ReportsScreen() {
             selected={period === 'today'} 
             onPress={() => setPeriod('today')} 
             style={styles.chip}
+            showSelectedOverlay
           >Hari Ini</Chip>
           <Chip 
             selected={period === 'week'} 
             onPress={() => setPeriod('week')} 
             style={styles.chip}
+            showSelectedOverlay
           >Minggu Ini</Chip>
           <Chip 
             selected={period === 'month'} 
             onPress={() => setPeriod('month')} 
             style={styles.chip}
+            showSelectedOverlay
           >Bulan Ini</Chip>
           <Chip 
             selected={period === 'all'} 
             onPress={() => setPeriod('all')} 
             style={styles.chip}
+            showSelectedOverlay
           >Semua</Chip>
         </ScrollView>
 
@@ -137,17 +180,17 @@ export default function ReportsScreen() {
           onDismiss={() => setMenuVisible(false)}
           anchor={
             <Button mode="outlined" onPress={() => setMenuVisible(true)} style={styles.filterBtn}>
-              {selectedEmployee ? getEmployeeName(selectedEmployee) : 'Semua Karyawan'}
+              {selectedCustomer ? getCustomerName(selectedCustomer) : 'Semua Nasabah'}
             </Button>
           }
         >
-          <Menu.Item onPress={() => { setSelectedEmployee(null); setMenuVisible(false); }} title="Semua Karyawan" />
+          <Menu.Item onPress={() => { setSelectedCustomer(null); setMenuVisible(false); }} title="Semua Nasabah" />
           <Divider />
-          {employees.map(emp => (
+          {customers.map(c => (
             <Menu.Item 
-              key={emp.uid} 
-              onPress={() => { setSelectedEmployee(emp.uid); setMenuVisible(false); }} 
-              title={emp.name} 
+              key={c.uid} 
+              onPress={() => { setSelectedCustomer(c.uid); setMenuVisible(false); }} 
+              title={c.name} 
             />
           ))}
         </Menu>
@@ -157,40 +200,120 @@ export default function ReportsScreen() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={styles.summaryContainer}>
-          <Card style={[styles.card, { borderLeftColor: '#f44336', borderLeftWidth: 4 }]}>
-            <Card.Content>
-              <Text variant="labelMedium">Total Kredit Keluar</Text>
-              <Text variant="titleLarge" style={{ color: '#f44336' }}>{formatCurrency(summary.totalCredit)}</Text>
-            </Card.Content>
-          </Card>
-          <Card style={[styles.card, { borderLeftColor: '#4caf50', borderLeftWidth: 4 }]}>
-            <Card.Content>
-              <Text variant="labelMedium">Total Pembayaran Masuk</Text>
-              <Text variant="titleLarge" style={{ color: '#4caf50' }}>{formatCurrency(summary.totalPayment)}</Text>
-            </Card.Content>
-          </Card>
-        </View>
+        {viewMode === 'credits' ? (
+            <>
+                <View style={styles.summaryContainer}>
+                <Card style={[styles.card, { borderLeftColor: '#1E88E5', borderLeftWidth: 4 }]}>
+                    <Card.Content>
+                    <Text variant="labelMedium">Total Transaksi</Text>
+                    <Text variant="titleLarge" style={{ color: '#1E88E5' }}>{summary.count}</Text>
+                    </Card.Content>
+                </Card>
+                <Card style={[styles.card, { borderLeftColor: '#f44336', borderLeftWidth: 4 }]}>
+                    <Card.Content>
+                    <Text variant="labelMedium">Nilai Kredit</Text>
+                    <Text variant="titleLarge" style={{ color: '#f44336' }}>{formatCurrency(summary.totalCredit)}</Text>
+                    </Card.Content>
+                </Card>
+                </View>
 
-        <Text variant="titleMedium" style={styles.sectionTitle}>Riwayat Transaksi ({transactions.length})</Text>
+                <Text variant="titleMedium" style={styles.sectionTitle}>Daftar Kredit Barang</Text>
 
-        {loading && <ActivityIndicator animating={true} style={{ marginTop: 20 }} />}
+                {loading && <ActivityIndicator animating={true} style={{ marginTop: 20 }} />}
 
-        {!loading && transactions.length === 0 && (
-          <Text style={{ textAlign: 'center', marginTop: 20, color: '#666' }}>Belum ada data transaksi pada periode ini.</Text>
+                {!loading && transactions.length === 0 && (
+                <Text style={{ textAlign: 'center', marginTop: 20, color: '#666' }}>Belum ada transaksi kredit pada periode ini.</Text>
+                )}
+
+                {transactions.map((tx) => {
+                const { paid, total, progress } = getInstallmentProgress(tx);
+                return (
+                    <Card key={tx.id} style={styles.txCard} mode="elevated">
+                    <Card.Content>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <View style={{ flex: 1 }}>
+                            <Text variant="labelSmall" style={{ color: '#999', marginBottom: 2 }}>ID: {tx.id}</Text>
+                            <Text variant="titleMedium" style={{ fontWeight: 'bold' }}>{tx.productName}</Text>
+                            <Text variant="bodyMedium">{tx.customerName}</Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                            <Badge 
+                                style={{ 
+                                backgroundColor: tx.status === 'active' ? '#2196F3' : tx.status === 'completed' ? '#4CAF50' : '#F44336',
+                                marginBottom: 4
+                                }}
+                            >
+                            {tx.status === 'active' ? 'Aktif' : tx.status === 'completed' ? 'Lunas' : 'Macet'}
+                            </Badge>
+                            <Text variant="bodySmall" style={{color: '#666'}}>{formatDate(tx.createdAt)}</Text>
+                        </View>
+                        </View>
+
+                        <Divider style={{ marginVertical: 8 }} />
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text variant="bodyMedium">Total Kredit:</Text>
+                        <Text variant="bodyMedium" style={{ fontWeight: 'bold' }}>{formatCurrency(tx.creditPriceTotal)}</Text>
+                        </View>
+                        
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text variant="bodyMedium">Cicilan:</Text>
+                        <Text variant="bodyMedium">{formatCurrency(tx.installmentAmount)} x {tx.tenorCount} ({tx.tenorType === 'weekly' ? 'Mingguan' : 'Bulanan'})</Text>
+                        </View>
+
+                        <View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <Text variant="bodySmall">Progress Pembayaran ({paid}/{total})</Text>
+                            <Text variant="bodySmall">{Math.round(progress * 100)}%</Text>
+                        </View>
+                        <ProgressBar progress={progress} color={progress === 1 ? '#4CAF50' : '#2196F3'} style={{ height: 6, borderRadius: 3 }} />
+                        </View>
+                    </Card.Content>
+                    </Card>
+                );
+                })}
+            </>
+        ) : (
+            <>
+                <Text variant="titleMedium" style={styles.sectionTitle}>Riwayat Mutasi Piutang</Text>
+                
+                {loading && <ActivityIndicator animating={true} style={{ marginTop: 20 }} />}
+
+                {!loading && mutations.length === 0 && (
+                    <Text style={{ textAlign: 'center', marginTop: 20, color: '#666' }}>Belum ada mutasi piutang pada periode ini.</Text>
+                )}
+
+                {mutations.map((item) => {
+                    const isPayment = item.type === 'payment';
+                    // For credit, principalAmount is the debt increase. If not available (old data), fallback to creditPriceTotal
+                    const amount = isPayment ? item.amount : (item.principalAmount || item.creditPriceTotal);
+                    const color = isPayment ? '#4CAF50' : '#f44336';
+                    
+                    return (
+                        <Card key={item.id} style={styles.txCard}>
+                            <Card.Content>
+                                <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+                                    <View style={{flex: 1}}>
+                                        <Text variant="labelSmall">{formatDate(item.createdAt)}</Text>
+                                        <Text variant="titleMedium">{isPayment ? 'Pembayaran' : (item.productName || 'Kredit Barang')}</Text>
+                                        <Text variant="bodyMedium">{getCustomerName(item.customerId)}</Text>
+                                    </View>
+                                    <View style={{alignItems:'flex-end'}}>
+                                        <Text variant="titleMedium" style={{color, fontWeight:'bold'}}>
+                                            {isPayment ? '-' : '+'} {formatCurrency(amount || 0)}
+                                        </Text>
+                                        <Chip style={{backgroundColor: color + '20', height:24, marginTop:4}} textStyle={{color, fontSize:10, lineHeight:14}}>
+                                            {isPayment ? 'Pelunasan' : 'Hutang Baru'}
+                                        </Chip>
+                                    </View>
+                                </View>
+                                {item.notes ? <Text variant="bodySmall" style={{marginTop:8, fontStyle:'italic'}}>"{item.notes}"</Text> : null}
+                            </Card.Content>
+                        </Card>
+                    )
+                 })}
+            </>
         )}
-
-        {transactions.map((tx) => (
-          <Card key={tx.id} style={styles.txCard}>
-            <List.Item
-              title={tx.type === 'credit' ? 'Pemberian Kredit' : 'Pembayaran Utang'}
-              description={`${formatDate(tx.createdAt)}\nOleh: ${getEmployeeName(tx.employeeId)}`}
-              descriptionNumberOfLines={2}
-              left={props => <Avatar.Icon {...props} icon={tx.type === 'credit' ? 'arrow-up-bold' : 'arrow-down-bold'} style={{ backgroundColor: tx.type === 'credit' ? '#ffebee' : '#e8f5e9' }} color={tx.type === 'credit' ? '#d32f2f' : '#388e3c'} size={40} />}
-              right={props => <Text {...props} variant="titleMedium" style={{ alignSelf: 'center', color: tx.type === 'credit' ? '#d32f2f' : '#388e3c' }}>{tx.type === 'credit' ? '+' : '-'}{formatCurrency(tx.amount)}</Text>}
-            />
-          </Card>
-        ))}
         
         <View style={{ height: 20 }} />
       </ScrollView>
@@ -230,7 +353,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   txCard: {
-    marginBottom: 10,
+    marginBottom: 12,
     backgroundColor: 'white',
   }
 });

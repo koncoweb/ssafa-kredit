@@ -1,35 +1,53 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, FlatList, RefreshControl, Alert, Image, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, FlatList, RefreshControl, Alert, Image, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
 import { Appbar, ActivityIndicator, Text, FAB, Portal, Dialog, TextInput, Button, Searchbar, Chip, Menu, Divider, IconButton, SegmentedButtons, HelperText, Snackbar } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Product } from '../../../src/types';
-import { getProducts, createProduct, updateProduct, deleteProduct } from '../../../src/services/productService';
+import { getProducts, createProduct, updateProduct, deleteProduct, updateProductStock, getProductStockHistory } from '../../../src/services/productService';
 import ProductListItem from '../../../src/components/products/ProductListItem';
+import { useAuthStore } from '../../../src/store/authStore';
+import { StockHistory } from '../../../src/types';
+
+const PRODUCT_CATEGORIES = [
+  "Elektronik",
+  "Handphone & Tablet",
+  "Komputer & Laptop",
+  "Fashion Pria",
+  "Fashion Wanita",
+  "Ibu & Bayi",
+  "Rumah Tangga",
+  "Kecantikan",
+  "Kesehatan",
+  "Olahraga",
+  "Otomotif",
+  "Hobi & Koleksi",
+  "Makanan & Minuman",
+  "Perlengkapan Sekolah",
+  "Lainnya"
+];
 
 export default function AdminProductListScreen() {
   const router = useRouter();
+  const user = useAuthStore(state => state.user);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  
-  // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [sortBy, setSortBy] = useState<'name' | 'price' | 'stock'>('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [showFilterDialog, setShowFilterDialog] = useState(false);
   
-  // Advanced Filter State
+  // Filter & Sort State
+  const [showFilterDialog, setShowFilterDialog] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'price' | 'stock'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Add/Edit State
+  // Add/Edit Dialog State
   const [dialogVisible, setDialogVisible] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  
-  // Form Fields
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newStock, setNewStock] = useState('10');
@@ -37,11 +55,14 @@ export default function AdminProductListScreen() {
   const [newImage, setNewImage] = useState<string | null>(null);
   const [newMarkup, setNewMarkup] = useState('');
   const [newCategory, setNewCategory] = useState('');
+  const [categoryMenuVisible, setCategoryMenuVisible] = useState(false);
+  const [filterCategoryMenuVisible, setFilterCategoryMenuVisible] = useState(false);
   const [newMinCredit, setNewMinCredit] = useState('');
   const [newRequirements, setNewRequirements] = useState('');
   const [newExpiry, setNewExpiry] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [newActive, setNewActive] = useState(true);
-  
+
   const [loadingSave, setLoadingSave] = useState(false);
   
   // Feedback State
@@ -49,9 +70,30 @@ export default function AdminProductListScreen() {
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarError, setSnackbarError] = useState(false);
 
+  // Stock History State
+  const [historyDialogVisible, setHistoryDialogVisible] = useState(false);
+  const [stockHistory, setStockHistory] = useState<StockHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [selectedProductForHistory, setSelectedProductForHistory] = useState<Product | null>(null);
+
   useEffect(() => {
     loadProducts();
   }, []);
+
+  const loadStockHistory = async (product: Product) => {
+    setSelectedProductForHistory(product);
+    setHistoryDialogVisible(true);
+    setLoadingHistory(true);
+    try {
+        const history = await getProductStockHistory(product.id);
+        setStockHistory(history);
+    } catch (e) {
+        console.error(e);
+        Alert.alert("Error", "Gagal memuat riwayat stok");
+    } finally {
+        setLoadingHistory(false);
+    }
+  };
 
   const loadProducts = async () => {
     try {
@@ -139,6 +181,14 @@ export default function AdminProductListScreen() {
     setNewActive(true);
   };
 
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    setShowDatePicker(false);
+    if (selectedDate) {
+      const formatted = selectedDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      setNewExpiry(formatted);
+    }
+  };
+
   const handleSave = async () => {
     if (!newName || !newPrice) {
       setSnackbarMessage('Nama dan Harga wajib diisi');
@@ -180,10 +230,16 @@ export default function AdminProductListScreen() {
       Object.keys(productData).forEach(key => productData[key] === undefined && delete productData[key]);
 
       if (editingProduct) {
+        // Handle Stock Update with History
+        if (stock !== editingProduct.stock) {
+             await updateProductStock(editingProduct.id, stock, user?.id || 'admin', 'Update Manual via Admin');
+             delete productData.stock; 
+        }
+
         await updateProduct(editingProduct.id, productData);
         setSnackbarMessage('Produk berhasil diperbarui');
       } else {
-        await createProduct(productData);
+        await createProduct(productData, user?.id || 'admin');
         setSnackbarMessage('Produk berhasil ditambahkan');
       }
 
@@ -307,7 +363,29 @@ export default function AdminProductListScreen() {
           <Dialog visible={showFilterDialog} onDismiss={() => setShowFilterDialog(false)}>
               <Dialog.Title>Filter Lanjutan</Dialog.Title>
               <Dialog.Content>
-                  <TextInput label="Kategori" value={categoryFilter} onChangeText={setCategoryFilter} mode="outlined" style={{marginBottom: 12}} />
+                  <Menu
+                      visible={filterCategoryMenuVisible}
+                      onDismiss={() => setFilterCategoryMenuVisible(false)}
+                      anchor={
+                          <TouchableOpacity onPress={() => setFilterCategoryMenuVisible(true)}>
+                              <TextInput 
+                                  label="Kategori" 
+                                  value={categoryFilter} 
+                                  mode="outlined" 
+                                  style={{marginBottom: 12}} 
+                                  editable={false}
+                                  right={<TextInput.Icon icon="chevron-down" onPress={() => setFilterCategoryMenuVisible(true)} />}
+                              />
+                          </TouchableOpacity>
+                      }
+                  >
+                      <Menu.Item onPress={() => { setCategoryFilter(''); setFilterCategoryMenuVisible(false); }} title="Semua Kategori" />
+                      <Divider />
+                      {PRODUCT_CATEGORIES.map((cat) => (
+                          <Menu.Item key={cat} onPress={() => { setCategoryFilter(cat); setFilterCategoryMenuVisible(false); }} title={cat} />
+                      ))}
+                  </Menu>
+
                   <View style={{flexDirection: 'row', gap: 10}}>
                       <TextInput label="Min Harga" value={minPrice} onChangeText={setMinPrice} keyboardType="numeric" mode="outlined" style={{flex: 1}} />
                       <TextInput label="Max Harga" value={maxPrice} onChangeText={setMaxPrice} keyboardType="numeric" mode="outlined" style={{flex: 1}} />
@@ -326,6 +404,21 @@ export default function AdminProductListScreen() {
             <Dialog.Title>{editingProduct ? 'Edit Produk' : 'Tambah Produk Baru'}</Dialog.Title>
             <Dialog.ScrollArea>
                 <ScrollView contentContainerStyle={{paddingTop: 10}}>
+                    {editingProduct && (
+                        <Button 
+                            mode="outlined" 
+                            icon="history" 
+                            onPress={() => {
+                                setDialogVisible(false); // Close edit dialog
+                                loadStockHistory(editingProduct);
+                            }}
+                            style={{marginBottom: 16, borderColor: '#1976D2'}}
+                            textColor="#1976D2"
+                        >
+                            Lihat Riwayat Stok
+                        </Button>
+                    )}
+
                     <TouchableOpacity onPress={pickImage} style={styles.imagePicker}>
                       {newImage && (newImage.startsWith('http') || newImage.startsWith('data:image')) ? (
                         <Image source={{ uri: newImage }} style={{ width: '100%', height: 150, borderRadius: 8 }} resizeMode="contain" />
@@ -343,7 +436,27 @@ export default function AdminProductListScreen() {
                         <TextInput label="Stok *" value={newStock} onChangeText={setNewStock} keyboardType="numeric" mode="outlined" style={[styles.input, {flex:0.5}]} />
                     </View>
 
-                    <TextInput label="Kategori" value={newCategory} onChangeText={setNewCategory} mode="outlined" style={styles.input} placeholder="Elektronik, Furniture, dll" />
+                    <Menu
+                        visible={categoryMenuVisible}
+                        onDismiss={() => setCategoryMenuVisible(false)}
+                        anchor={
+                            <TouchableOpacity onPress={() => setCategoryMenuVisible(true)}>
+                                <TextInput 
+                                    label="Kategori" 
+                                    value={newCategory} 
+                                    mode="outlined" 
+                                    style={styles.input} 
+                                    placeholder="Pilih Kategori" 
+                                    editable={false}
+                                    right={<TextInput.Icon icon="chevron-down" onPress={() => setCategoryMenuVisible(true)} />}
+                                />
+                            </TouchableOpacity>
+                        }
+                    >
+                        {PRODUCT_CATEGORIES.map((cat) => (
+                            <Menu.Item key={cat} onPress={() => { setNewCategory(cat); setCategoryMenuVisible(false); }} title={cat} />
+                        ))}
+                    </Menu>
                     
                     <TextInput 
                         label="Markup Kredit Khusus (%)" 
@@ -360,7 +473,27 @@ export default function AdminProductListScreen() {
 
                     <TextInput label="Min. Pembelian Kredit (item)" value={newMinCredit} onChangeText={setNewMinCredit} keyboardType="numeric" mode="outlined" style={styles.input} />
                     <TextInput label="Persyaratan Kredit Khusus" value={newRequirements} onChangeText={setNewRequirements} mode="outlined" style={styles.input} multiline />
-                    <TextInput label="Masa Berlaku / Expired" value={newExpiry} onChangeText={setNewExpiry} mode="outlined" style={styles.input} placeholder="YYYY-MM-DD" />
+                    
+                    <TouchableOpacity onPress={() => setShowDatePicker(true)}>
+                        <TextInput 
+                            label="Masa Berlaku / Expired" 
+                            value={newExpiry} 
+                            mode="outlined" 
+                            style={styles.input} 
+                            placeholder="YYYY-MM-DD" 
+                            editable={false}
+                            right={<TextInput.Icon icon="calendar" onPress={() => setShowDatePicker(true)} />}
+                        />
+                    </TouchableOpacity>
+                    {showDatePicker && (
+                        <DateTimePicker
+                            testID="dateTimePicker"
+                            value={newExpiry ? new Date(newExpiry) : new Date()}
+                            mode="date"
+                            display="default"
+                            onChange={onDateChange}
+                        />
+                    )}
                     
                     <TextInput label="Deskripsi" value={newDesc} onChangeText={setNewDesc} mode="outlined" numberOfLines={3} multiline style={styles.input} />
                     
@@ -377,6 +510,50 @@ export default function AdminProductListScreen() {
                 <Button onPress={handleSave} loading={loadingSave} mode="contained">Simpan</Button>
             </Dialog.Actions>
         </Dialog>
+      </Portal>
+
+      {/* Stock History Dialog */}
+      <Portal>
+          <Dialog visible={historyDialogVisible} onDismiss={() => setHistoryDialogVisible(false)} style={{maxHeight: '80%'}}>
+              <Dialog.Title>Riwayat Stok: {selectedProductForHistory?.name}</Dialog.Title>
+              <Dialog.Content>
+                  {loadingHistory ? (
+                      <ActivityIndicator size="large" style={{marginVertical: 20}} />
+                  ) : (
+                      <FlatList
+                          data={stockHistory}
+                          keyExtractor={item => item.id}
+                          renderItem={({item}) => (
+                              <View style={{borderBottomWidth: 1, borderBottomColor: '#eee', paddingVertical: 8}}>
+                                  <View style={{flexDirection:'row', justifyContent:'space-between'}}>
+                                      <Text variant="bodyMedium" style={{fontWeight:'bold'}}>
+                                          {item.type === 'transaction' ? 'Transaksi' : 
+                                           item.type === 'restock' ? 'Stok Awal/Restock' : 'Penyesuaian Manual'}
+                                      </Text>
+                                      <Text variant="bodyMedium" style={{
+                                          color: item.changeAmount > 0 ? '#4CAF50' : '#F44336',
+                                          fontWeight: 'bold'
+                                      }}>
+                                          {item.changeAmount > 0 ? '+' : ''}{item.changeAmount}
+                                      </Text>
+                                  </View>
+                                  <Text variant="bodySmall" style={{color:'#666'}}>
+                                      {item.createdAt instanceof Date ? item.createdAt.toLocaleString() : 'Baru saja'}
+                                  </Text>
+                                  <View style={{flexDirection:'row', justifyContent:'space-between', marginTop: 4}}>
+                                      <Text variant="bodySmall">Stok: {item.oldStock} ➔ {item.newStock}</Text>
+                                      <Text variant="bodySmall" style={{color:'#666', fontStyle:'italic'}}>{item.notes || '-'}</Text>
+                                  </View>
+                              </View>
+                          )}
+                          ListEmptyComponent={<Text style={{textAlign:'center', marginTop: 20}}>Belum ada riwayat.</Text>}
+                      />
+                  )}
+              </Dialog.Content>
+              <Dialog.Actions>
+                  <Button onPress={() => setHistoryDialogVisible(false)}>Tutup</Button>
+              </Dialog.Actions>
+          </Dialog>
       </Portal>
 
       <FAB

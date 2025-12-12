@@ -49,7 +49,9 @@ export default function ProductListItem({ product, onPress, onEdit, onDelete }: 
           <Text variant="titleSmall" style={styles.price}>{formatCurrency(product.priceCash)}</Text>
           
           <View style={styles.detailsRow}>
-            <Text variant="bodySmall" style={{color: '#757575'}}>Stok: {product.stock}</Text>
+            <Text variant="bodySmall" style={{color: product.stock < 5 ? '#D32F2F' : '#757575', fontWeight: product.stock < 5 ? 'bold' : 'normal'}}>
+                Stok: {product.stock} {product.stock < 5 ? '(Menipis!)' : ''}
+            </Text>
             <Text variant="bodySmall" style={{color: '#757575'}}> • </Text>
             <Text variant="bodySmall" style={{color: '#757575'}}>{product.category || 'Uncategorized'}</Text>
           </View>

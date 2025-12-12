@@ -14,6 +14,7 @@ import {
   runTransaction,
   increment
 } from 'firebase/firestore';
+import { STATS_COLLECTION, STATS_FINANCIALS_DOC } from './transactionService';
 
 export async function setUserRole(uid: string, role: string) {
   await setDoc(doc(db, 'users', uid), { role }, { merge: true });
@@ -152,7 +153,8 @@ export interface CustomerData {
   phone?: string;
   address?: string;
   creditLimit: number;
-  currentDebt: number;
+  currentDebt: number; // Deprecated, use totalDebt
+  totalDebt?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -170,7 +172,8 @@ export interface Transaction {
 export async function getCustomerData(uid: string): Promise<CustomerData | null> {
   const snap = await getDoc(doc(db, 'customers', uid));
   if (snap.exists()) {
-    return { uid: snap.id, ...snap.data() } as CustomerData;
+    const data = snap.data();
+    return { uid: snap.id, ...data, totalDebt: data.totalDebt || data.currentDebt || 0 } as CustomerData;
   }
   return null;
 }
@@ -188,6 +191,7 @@ export async function createCustomerProfile(uid: string, data: Partial<CustomerD
   await setDoc(doc(db, 'customers', uid), {
     ...data,
     currentDebt: data.currentDebt || 0,
+    totalDebt: data.totalDebt || 0,
     updatedAt: serverTimestamp(),
   }, { merge: true });
 }
@@ -269,12 +273,41 @@ export async function getAdminStats() {
   const customersSnap = await getDocs(collection(db, 'customers'));
   const customersCount = customersSnap.size;
 
-  // For total receivables, we'd need to sum up currentDebt from all customers
   let totalDebt = 0;
-  customersSnap.forEach((doc: any) => {
-    const data = doc.data();
-    totalDebt += (data.currentDebt || 0);
-  });
+  let usedFallback = false;
+
+  const statsRef = doc(db, STATS_COLLECTION, STATS_FINANCIALS_DOC);
+
+  try {
+    const statsSnap = await getDoc(statsRef);
+    if (statsSnap.exists()) {
+      totalDebt = statsSnap.data().totalReceivables || 0;
+    } else {
+      usedFallback = true;
+    }
+  } catch (e) {
+    console.warn("Failed to fetch stats (using fallback):", e);
+    usedFallback = true;
+  }
+
+  if (usedFallback) {
+    // Fallback: Calculate from customers
+    customersSnap.forEach((doc: any) => {
+      const data = doc.data();
+      totalDebt += (data.totalDebt || data.currentDebt || 0);
+    });
+
+    // Initialize stats doc if missing (and we have permission)
+    try {
+        await setDoc(statsRef, {
+            totalReceivables: totalDebt,
+            updatedAt: serverTimestamp()
+        });
+    } catch (e) {
+        // Ignore write errors (likely permission denied or network)
+        console.log("Skipping stats init due to error:", e);
+    }
+  }
 
   return {
     customersCount,

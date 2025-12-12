@@ -11,11 +11,15 @@ import {
   query, 
   where, 
   orderBy,
-  serverTimestamp
+  serverTimestamp,
+  runTransaction,
+  increment,
+  Transaction
 } from 'firebase/firestore';
 import { Product, CreditSettings } from '../types';
 
 export const PRODUCTS_COLLECTION = 'products';
+export const STOCK_HISTORY_COLLECTION = 'stock_history';
 export const SETTINGS_COLLECTION = 'settings';
 export const CREDIT_SETTINGS_DOC = 'credit';
 
@@ -46,13 +50,33 @@ export async function getProduct(id: string): Promise<Product | null> {
   return null;
 }
 
-export async function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>) {
-  const docRef = await addDoc(collection(db, PRODUCTS_COLLECTION), {
-    ...data,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
+export async function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, userId: string) {
+  await runTransaction(db, async (transaction: Transaction) => {
+    const newProductRef = doc(collection(db, PRODUCTS_COLLECTION));
+    
+    transaction.set(newProductRef, {
+      ...data,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    // Log Initial Stock History
+    if (data.stock > 0) {
+      const historyRef = doc(collection(db, STOCK_HISTORY_COLLECTION));
+      transaction.set(historyRef, {
+        id: historyRef.id,
+        productId: newProductRef.id,
+        productName: data.name,
+        oldStock: 0,
+        newStock: data.stock,
+        changeAmount: data.stock,
+        type: 'restock',
+        notes: 'Stok Awal',
+        updatedBy: userId,
+        createdAt: serverTimestamp()
+      });
+    }
   });
-  return docRef.id;
 }
 
 export async function updateProduct(id: string, data: Partial<Product>) {
@@ -65,6 +89,68 @@ export async function updateProduct(id: string, data: Partial<Product>) {
 
 export async function deleteProduct(id: string) {
   await deleteDoc(doc(db, PRODUCTS_COLLECTION, id));
+}
+
+export async function updateProductStock(
+  productId: string, 
+  newStock: number, 
+  userId: string, 
+  notes: string = ''
+) {
+  await runTransaction(db, async (transaction: Transaction) => {
+    const productRef = doc(db, PRODUCTS_COLLECTION, productId);
+    const productDoc = await transaction.get(productRef);
+
+    if (!productDoc.exists()) {
+      throw new Error("Produk tidak ditemukan!");
+    }
+
+    const currentStock = productDoc.data().stock || 0;
+    const changeAmount = newStock - currentStock;
+
+    if (changeAmount === 0) return;
+
+    // Update product stock
+    transaction.update(productRef, { 
+      stock: newStock,
+      updatedAt: serverTimestamp()
+    });
+
+    // Create history record
+    const historyRef = doc(collection(db, STOCK_HISTORY_COLLECTION));
+    transaction.set(historyRef, {
+      id: historyRef.id,
+      productId,
+      productName: productDoc.data().name,
+      oldStock: currentStock,
+      newStock: newStock,
+      changeAmount,
+      type: 'manual_adjustment',
+      notes,
+      updatedBy: userId,
+      createdAt: serverTimestamp()
+    });
+  });
+}
+
+import { StockHistory } from '../types';
+
+export async function getProductStockHistory(productId: string): Promise<StockHistory[]> {
+  const q = query(
+    collection(db, STOCK_HISTORY_COLLECTION),
+    where('productId', '==', productId),
+    orderBy('createdAt', 'desc')
+  );
+
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d: any) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      ...data,
+      createdAt: data.createdAt?.toDate?.() || new Date()
+    } as StockHistory;
+  });
 }
 
 // --- Settings ---

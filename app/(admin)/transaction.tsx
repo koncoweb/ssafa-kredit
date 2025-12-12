@@ -1,457 +1,659 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, View, Alert, TouchableOpacity } from 'react-native';
-import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, SegmentedButtons, ActivityIndicator } from 'react-native-paper';
+import React, { useEffect, useState, useMemo } from 'react';
+import { ScrollView, View, Alert, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
+import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, SegmentedButtons, ActivityIndicator, Chip, Checkbox } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { getAllCustomers, processTransaction, getCustomerTransactions, CustomerData, Transaction } from '../../src/services/firestore';
+import { generateAgreementPDF } from '../../src/services/printService';
+import { getAllCustomers, CustomerData } from '../../src/services/firestore';
+import { getProducts, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../src/services/productService';
+import { createCreditTransaction, processPayment } from '../../src/services/transactionService';
+import { Product, CreditSettings, Customer } from '../../src/types';
 import { useAuthStore } from '../../src/store/authStore';
 
-// Helper function
 const formatCurrency = (val: number) => {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
 };
 
-// --- Sub-components ---
-
-interface TransactionHistoryListProps {
-  transactions: Transaction[];
-  loading: boolean;
-}
-
-const TransactionHistoryList: React.FC<TransactionHistoryListProps> = ({ transactions, loading }) => {
-  if (loading) {
-    return (
-      <View>
-        <Text variant="titleSmall" style={{ marginBottom: 8, color: '#666' }}>Riwayat Terakhir:</Text>
-        <ActivityIndicator size="small" />
-      </View>
-    );
-  }
-
-  return (
-    <View>
-      <Text variant="titleSmall" style={{ marginBottom: 8, color: '#666' }}>Riwayat Terakhir:</Text>
-      {transactions.length > 0 ? (
-        transactions.slice(0, 3).map((tx, idx) => (
-          <View key={tx.id || idx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-            <Text variant="bodySmall" style={{ color: '#888' }}>
-              {tx.createdAt?.toDate ? tx.createdAt.toDate().toLocaleDateString('id-ID') : 'Baru saja'}
-            </Text>
-            <Text variant="bodySmall" style={{ color: tx.type === 'credit' ? '#D32F2F' : '#388E3C', fontWeight: 'bold' }}>
-              {tx.type === 'credit' ? '+' : '-'}{formatCurrency(tx.amount)}
-            </Text>
-          </View>
-        ))
-      ) : (
-        <Text variant="bodySmall" style={{ fontStyle: 'italic', color: '#999' }}>Belum ada riwayat transaksi</Text>
-      )}
-    </View>
-  );
-};
-
-interface CustomerDetailViewProps {
-  customer: CustomerData;
-  onChange: () => void;
-  loadingHistory: boolean;
-  lastTransactions: Transaction[];
-}
-
-const CustomerDetailView: React.FC<CustomerDetailViewProps> = ({ 
-  customer, 
-  onChange, 
-  loadingHistory, 
-  lastTransactions 
-}) => {
-  return (
-    <View>
-      <View>
-        <Text variant="headlineSmall" style={{ color: '#1E88E5', fontWeight: 'bold' }}>{customer.name}</Text>
-        <Text variant="bodyMedium">Email: {customer.email}</Text>
-        <Text variant="bodyMedium">Limit Kredit: {formatCurrency(customer.creditLimit)}</Text>
-        <Text variant="bodyMedium" style={{ color: customer.currentDebt > 0 ? '#F44336' : '#4CAF50' }}>
-          Utang Saat Ini: {formatCurrency(customer.currentDebt)}
-        </Text>
-      </View>
-
-      <Button mode="text" onPress={onChange} style={{ marginTop: 10 }}>
-        Ganti Nasabah
-      </Button>
-
-      <Divider style={{ marginVertical: 15 }} />
-
-      <TransactionHistoryList transactions={lastTransactions} loading={loadingHistory} />
-    </View>
-  );
-};
-
-interface EstimationViewProps {
-  customer: CustomerData;
-  amount: string;
-  mode: string;
-}
-
-const EstimationView: React.FC<EstimationViewProps> = ({ customer, amount, mode }) => {
-  const parsedAmount = parseInt(amount);
-  if (!customer || !amount || isNaN(parsedAmount) || parsedAmount <= 0) {
-    return null;
-  }
-
-  const isCredit = mode === 'credit';
-  const newDebt = isCredit 
-    ? (customer.currentDebt || 0) + parsedAmount
-    : (customer.currentDebt || 0) - parsedAmount;
-  
-  const isLimitExceeded = isCredit && (customer.creditLimit || 0) > 0 && newDebt > (customer.creditLimit || 0);
-  const remainingLimit = (customer.creditLimit || 0) - newDebt;
-
-  return (
-    <View style={{ marginBottom: 20, paddingHorizontal: 5 }}>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
-        <Text variant="bodySmall" style={{ color: '#666' }}>
-          {isCredit ? 'Estimasi Total Utang Baru: ' : 'Estimasi Sisa Utang: '}
-        </Text>
-        <Text variant="bodySmall" style={{ fontWeight: 'bold', color: isCredit ? '#D32F2F' : '#388E3C' }}>
-          {formatCurrency(newDebt)}
-        </Text>
-      </View>
-      {isCredit && (customer.creditLimit || 0) > 0 && (
-        <View style={{ marginTop: 4 }}>
-          <Text variant="bodySmall" style={{ color: isLimitExceeded ? '#D32F2F' : '#666' }}>
-            Sisa Limit: {formatCurrency(remainingLimit)}
-          </Text>
-        </View>
-      )}
-    </View>
-  );
-};
-
-// --- Main Component ---
-
-export default function TransactionScreen() {
+export default function CreditTransactionScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const { user } = useAuthStore();
-  
-  const [mode, setMode] = useState<string>((params.mode as string) || 'credit'); // 'credit' | 'payment'
-  const [customers, setCustomers] = useState<CustomerData[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<CustomerData | null>(null);
-  const [lastTransactions, setLastTransactions] = useState<Transaction[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  
-  // Form State
-  const [amount, setAmount] = useState('');
-  const [displayAmount, setDisplayAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [loading, setLoading] = useState(false);
-  
-  // Customer Selector Dialog
-  const [dialogVisible, setDialogVisible] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const { mode } = useLocalSearchParams();
+  const isPaymentMode = mode === 'payment';
 
-  // Dialog States
-  const [successVisible, setSuccessVisible] = useState(false);
-  const [errorVisible, setErrorVisible] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [errorTitle, setErrorTitle] = useState('Gagal');
-  const [errorIcon, setErrorIcon] = useState('alert-circle');
-  const [errorColor, setErrorColor] = useState('#D32F2F');
+  const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Select Customer, 2: Select Product, 3: Details & Confirm
+
+  // Data
+  const [customers, setCustomers] = useState<CustomerData[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [creditSettings, setCreditSettings] = useState<CreditSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Selection State
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerData | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+
+  // Transaction Details State
+  const [tenorType, setTenorType] = useState<'weekly' | 'monthly' | 'daily'>('weekly');
+  const [selectedTenor, setSelectedTenor] = useState<number | null>(null);
+  const [downPayment, setDownPayment] = useState<string>('');
+  const [notes, setNotes] = useState('');
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  
+  // Payment State
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentNotes, setPaymentNotes] = useState('');
+
+  // Search State
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+
+  // Processing State
+  const [processing, setProcessing] = useState(false);
+  const user = useAuthStore(state => state.user);
+  
+  // Custom Tenor State (Cicilan Bebas)
+  const [customTenor, setCustomTenor] = useState<string>('');
+  
+  // Modal State
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [errorModalVisible, setErrorModalVisible] = useState(false);
+  const [errorDetails, setErrorDetails] = useState('');
+  const [lastTransactionId, setLastTransactionId] = useState('');
 
   useEffect(() => {
-    console.log('TransactionScreen mounted/rendered');
-    loadCustomers();
+    loadInitialData();
   }, []);
 
-  const loadCustomers = async () => {
+  const generatePDF = async () => {
+    if (!selectedCustomer || !selectedProduct || !creditCalculation || !selectedTenor) return;
+
     try {
-      const data = await getAllCustomers();
-      setCustomers(data);
+      const schedule = getFullSchedule(tenorType, selectedTenor);
+      
+      await generateAgreementPDF({
+        customer: {
+          name: selectedCustomer.name,
+          id: selectedCustomer.uid, // Using UID as ID placeholder if KTP not available
+          address: selectedCustomer.address || '-',
+          phone: selectedCustomer.phone || '-'
+        },
+        product: {
+          name: selectedProduct.name,
+          priceCash: selectedProduct.priceCash
+        },
+        transaction: {
+          priceCredit: creditCalculation.creditPriceTotal,
+          downPayment: parseInt(downPayment) || 0,
+          principal: creditCalculation.principal,
+          tenorType: tenorType,
+          tenorCount: selectedTenor,
+          installmentAmount: creditCalculation.installment,
+          markupPercentage: creditCalculation.markupUsed
+        },
+        schedule: schedule.map(s => ({
+          installment: s.installment,
+          date: s.date
+        })),
+        officerName: user?.name || 'Petugas'
+      });
     } catch (error) {
-      console.error(error);
-      Alert.alert('Error', 'Gagal memuat data nasabah');
+      Alert.alert("Error", "Gagal mencetak dokumen");
     }
   };
 
-  const handleAmountChange = (text: string) => {
-    const clean = text.replace(/[^0-9]/g, '');
-    setAmount(clean);
-    
-    if (clean) {
-      const parsed = parseInt(clean);
-      setDisplayAmount(new Intl.NumberFormat('id-ID').format(parsed));
-    } else {
-      setDisplayAmount('');
-    }
-  };
-
-  const filteredCustomers = customers.filter(c => 
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const handleSelectCustomer = async (customer: CustomerData) => {
-    setSelectedCustomer(customer);
-    setDialogVisible(false);
-    
-    // Reset history state
-    setLastTransactions([]);
-    setLoadingHistory(true);
-    
+  const loadInitialData = async () => {
     try {
-      const history = await getCustomerTransactions(customer.uid);
-      setLastTransactions(history);
-    } catch (error) {
-      console.warn('Failed to load history:', error);
+      setLoading(true);
+      const [custData, prodData, settingsData] = await Promise.all([
+        getAllCustomers(),
+        getProducts(true), // Only active products
+        getCreditSettings()
+      ]);
+      setCustomers(custData);
+      setProducts(prodData);
+      setCreditSettings(settingsData);
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "Gagal memuat data");
     } finally {
-      setLoadingHistory(false);
+      setLoading(false);
     }
   };
 
-  const showError = (title: string, message: string, icon: string = 'alert-circle', color: string = '#D32F2F') => {
-    setErrorTitle(title);
-    setErrorMessage(message);
-    setErrorIcon(icon);
-    setErrorColor(color);
-    setErrorVisible(true);
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()));
+  }, [customers, customerSearch]);
+
+  const filteredProducts = useMemo(() => {
+    return products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()));
+  }, [products, productSearch]);
+
+  // Calculations
+  const creditCalculation = useMemo(() => {
+    if (!selectedProduct || !creditSettings) return null;
+    
+    const creditPriceTotal = calculateCreditPrice(
+      selectedProduct.priceCash, 
+      selectedProduct.markupPercentage, 
+      creditSettings.globalMarkupPercentage
+    );
+
+    const dpAmount = parseInt(downPayment) || 0;
+    const principal = creditPriceTotal - dpAmount;
+    
+    let installment = 0;
+    if (selectedTenor) {
+      installment = calculateInstallment(creditPriceTotal, dpAmount, selectedTenor);
+    }
+
+    return {
+      creditPriceTotal,
+      principal,
+      installment,
+      markupUsed: selectedProduct.markupPercentage ?? creditSettings.globalMarkupPercentage
+    };
+  }, [selectedProduct, creditSettings, downPayment, selectedTenor]);
+
+  const getNextDueDate = (type: 'weekly' | 'monthly' | 'daily') => {
+    const today = new Date();
+    const nextDate = new Date(today);
+    if (type === 'weekly') {
+      nextDate.setDate(today.getDate() + 7);
+    } else if (type === 'daily') {
+      nextDate.setDate(today.getDate() + 1);
+    } else {
+      nextDate.setMonth(today.getMonth() + 1);
+    }
+    return nextDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  const [scheduleDialogVisible, setScheduleDialogVisible] = useState(false);
+  const getFullSchedule = (type: 'weekly' | 'monthly' | 'daily', count: number) => {
+    const dates = [];
+    const today = new Date();
+    for (let i = 1; i <= count; i++) {
+        const d = new Date(today);
+        if (type === 'weekly') {
+            d.setDate(today.getDate() + (i * 7));
+        } else if (type === 'daily') {
+            d.setDate(today.getDate() + i);
+        } else {
+            d.setMonth(today.getMonth() + i);
+        }
+        dates.push({
+            installment: i,
+            date: d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+        });
+    }
+    return dates;
+  };
+
+  const handlePaymentSubmit = async () => {
+    if (!selectedCustomer || !paymentAmount) return;
+
+    setProcessing(true);
+    try {
+        await processPayment({
+            customerId: selectedCustomer.uid,
+            amount: parseInt(paymentAmount),
+            notes: paymentNotes,
+            collectorId: user?.id || 'unknown'
+        });
+        setSuccessModalVisible(true);
+    } catch (e: any) {
+        setErrorDetails(e.message || "Gagal mencatat pembayaran");
+        setErrorModalVisible(true);
+    } finally {
+        setProcessing(false);
+    }
   };
 
   const handleSubmit = async () => {
-    console.log('handleSubmit triggered');
+    if (!selectedCustomer || !selectedProduct || !selectedTenor || !creditCalculation) return;
     
-    if (!selectedCustomer) {
-      showError('Pilih Nasabah', 'Silakan pilih nasabah terlebih dahulu sebelum menyimpan transaksi.', 'account-alert');
-      return;
-    }
-    
-    const parsedAmount = parseInt(amount);
-    
-    if (!amount || isNaN(parsedAmount) || parsedAmount <= 0) {
-      showError('Jumlah Tidak Valid', 'Masukkan jumlah uang yang valid (hanya angka dan lebih dari 0).', 'numeric-off');
+    // Validations
+    if (selectedProduct.stock < 1) {
+      Alert.alert("Error", "Stok produk habis!");
       return;
     }
 
-    // Client-side validation for credit limit
-    if (mode === 'credit') {
-      const currentDebt = selectedCustomer.currentDebt || 0;
-      const creditLimit = selectedCustomer.creditLimit || 0;
-      
-      if (creditLimit > 0 && (currentDebt + parsedAmount) > creditLimit) {
-        showError(
-          'Limit Kredit Terlampaui', 
-          `Transaksi ditolak karena total utang akan melebihi limit yang ditentukan.\n\n` +
-          `• Limit Kredit: ${formatCurrency(creditLimit)}\n` +
-          `• Utang Saat Ini: ${formatCurrency(currentDebt)}\n` +
-          `• Sisa Limit: ${formatCurrency(creditLimit - currentDebt)}\n` +
-          `• Pengajuan: ${formatCurrency(parsedAmount)}`,
-          'hand-coin',
-          '#C62828'
-        );
+    if (creditCalculation.principal <= 0) {
+      Alert.alert("Error", "Total pinjaman tidak valid (DP terlalu besar)");
+      return;
+    }
+
+    if (!agreedToTerms) {
+        Alert.alert("Persetujuan Diperlukan", "Harap setujui syarat dan ketentuan kredit.");
         return;
-      }
     }
 
-    if (!user?.id) {
-      showError('Sesi Berakhir', 'Sesi login Anda tidak valid. Silakan logout dan login kembali.', 'account-key');
-      return;
-    }
-
-    setLoading(true);
+    setProcessing(true);
     try {
-      const txId = await processTransaction({
-        customerId: selectedCustomer.uid,
-        amount: parsedAmount,
-        type: mode as 'credit' | 'payment',
-        description: description || (mode === 'credit' ? 'Tambah Kredit' : 'Pembayaran Utang'),
-        employeeId: user.id
-      });
-
-      // Update local state
-      if (selectedCustomer) {
-        const newDebt = mode === 'credit' 
-          ? (selectedCustomer.currentDebt || 0) + parsedAmount
-          : (selectedCustomer.currentDebt || 0) - parsedAmount;
-          
-        setSelectedCustomer({
-          ...selectedCustomer,
-          currentDebt: newDebt
+        const newTransactionId = await createCreditTransaction({
+            customer: {
+                id: selectedCustomer.uid, // Use uid from CustomerData
+                name: selectedCustomer.name,
+                address: selectedCustomer.address || '',
+                phone: selectedCustomer.phone || '',
+                totalDebt: selectedCustomer.currentDebt
+            },
+            product: selectedProduct,
+            creditPriceTotal: creditCalculation.creditPriceTotal,
+            markupUsed: creditCalculation.markupUsed,
+            downPayment: parseInt(downPayment) || 0,
+            tenorType: tenorType,
+            tenorCount: selectedTenor,
+            installmentAmount: creditCalculation.installment,
+            notes: notes,
+            approvedBy: {
+              id: user?.id || 'unknown',
+              name: user?.name || 'Unknown User',
+              role: user?.role || 'admin'
+            }
         });
 
-        setCustomers(prev => prev.map(c => 
-          c.uid === selectedCustomer.uid 
-            ? { ...c, currentDebt: newDebt }
-            : c
-        ));
-
-        const newTx: Transaction = {
-          id: txId,
-          customerId: selectedCustomer.uid,
-          amount: parsedAmount,
-          type: mode as 'credit' | 'payment',
-          description: description || (mode === 'credit' ? 'Tambah Kredit' : 'Pembayaran Utang'),
-          createdAt: { toDate: () => new Date() },
-          employeeId: user.id
-        };
-        setLastTransactions(prev => [newTx, ...prev]);
-      }
-
-      setAmount('');
-      setDisplayAmount('');
-      setDescription('');
-      
-      setLoading(false);
-      setSuccessVisible(true);
-
-    } catch (error: any) {
-      setLoading(false);
-      if (error.message?.includes('Melebihi limit kredit')) {
-        showError('Limit Kredit Terlampaui', error.message, 'hand-coin', '#C62828');
-      } else {
-        showError('Transaksi Gagal', `Terjadi kesalahan: ${error.message}`, 'wifi-off');
-      }
+        setLastTransactionId(newTransactionId);
+        setSuccessModalVisible(true);
+    } catch (e: any) {
+        setErrorDetails(e.message || "Terjadi kesalahan saat menyimpan transaksi");
+        setErrorModalVisible(true);
+    } finally {
+        setProcessing(false);
     }
   };
 
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" /></View>;
+  }
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
+    <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
       <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
-        <Appbar.BackAction onPress={() => router.back()} />
-        <Appbar.Content title={mode === 'credit' ? 'Tambah Kredit' : 'Input Pembayaran'} />
+        {step > 1 && <Appbar.BackAction onPress={() => setStep(prev => (prev - 1) as 1|2|3)} />}
+        <Appbar.Content title="Transaksi Kredit Baru" />
       </Appbar.Header>
 
-      <ScrollView contentContainerStyle={{ padding: 16 }}>
-        <SegmentedButtons
-          value={mode}
-          onValueChange={setMode}
-          buttons={[
-            { value: 'credit', label: 'Tambah Utang', icon: 'plus-circle' },
-            { value: 'payment', label: 'Bayar Utang', icon: 'cash-check' },
-          ]}
-          style={{ marginBottom: 20 }}
-        />
-
-        <Card style={{ marginBottom: 20, backgroundColor: 'white' }} mode="outlined">
-          <Card.Content>
-            <Text variant="titleMedium" style={{ marginBottom: 10 }}>Pilih Nasabah</Text>
-            <View>
-              {selectedCustomer ? (
-                <CustomerDetailView 
-                  customer={selectedCustomer} 
-                  onChange={() => setDialogVisible(true)}
-                  loadingHistory={loadingHistory}
-                  lastTransactions={lastTransactions}
-                />
-              ) : (
-                <Button mode="outlined" onPress={() => setDialogVisible(true)} icon="magnify">
-                  Cari Nasabah
-                </Button>
-              )}
-            </View>
-          </Card.Content>
-        </Card>
-
-        <TextInput
-          label="Jumlah (Rp)"
-          value={displayAmount}
-          onChangeText={handleAmountChange}
-          keyboardType="number-pad"
-          style={{ marginBottom: 5, backgroundColor: 'white' }}
-          mode="outlined"
-          left={<TextInput.Icon icon="cash" />}
-        />
-        
-        {selectedCustomer && (
-          <EstimationView customer={selectedCustomer} amount={amount} mode={mode} />
+      <View style={{flex: 1}}>
+        {/* Step 1: Select Customer */}
+        {step === 1 && (
+          <View style={styles.stepContainer}>
+            <Text variant="titleMedium" style={styles.stepTitle}>Langkah 1: Pilih Pelanggan</Text>
+            <Searchbar
+                placeholder="Cari nama pelanggan..."
+                onChangeText={setCustomerSearch}
+                value={customerSearch}
+                style={styles.searchBar}
+            />
+            <FlatList
+                data={filteredCustomers}
+                keyExtractor={item => item.uid}
+                contentContainerStyle={{paddingBottom: 20}}
+                renderItem={({item}) => (
+                    <TouchableOpacity onPress={() => { setSelectedCustomer(item); setStep(2); }}>
+                        <Card style={styles.cardItem}>
+                            <Card.Content>
+                                <Text variant="titleMedium">{item.name}</Text>
+                                <Text variant="bodySmall" style={{color:'#666'}}>{item.email} - {item.phone}</Text>
+                                <Text variant="bodySmall" style={{marginTop: 4, color: (item.currentDebt || 0) > 0 ? '#D32F2F' : '#388E3C'}}>
+                                    Utang: {formatCurrency(item.currentDebt || 0)}
+                                </Text>
+                            </Card.Content>
+                        </Card>
+                    </TouchableOpacity>
+                )}
+            />
+          </View>
         )}
 
-        <TextInput
-          label="Keterangan (Opsional)"
-          value={description}
-          onChangeText={setDescription}
-          multiline
-          numberOfLines={3}
-          style={{ marginBottom: 20, backgroundColor: 'white' }}
-          mode="outlined"
-        />
-
-        <Button 
-          mode="contained" 
-          onPress={handleSubmit} 
-          loading={loading}
-          disabled={loading}
-          style={{ paddingVertical: 5, borderRadius: 8, backgroundColor: mode === 'credit' ? '#D32F2F' : '#388E3C' }}
-        >
-          {mode === 'credit' ? 'Simpan Kredit Baru' : 'Simpan Pembayaran'}
-        </Button>
-      </ScrollView>
-
-      {/* Customer Selection Dialog */}
-      <Portal>
-        <Dialog visible={dialogVisible} onDismiss={() => setDialogVisible(false)} style={{ maxHeight: '80%' }}>
-          <Dialog.Title>Cari Nasabah</Dialog.Title>
-          <Dialog.Content>
-            <Searchbar
-              placeholder="Cari nama atau email..."
-              onChangeText={setSearchQuery}
-              value={searchQuery}
-              style={{ marginBottom: 10, backgroundColor: '#f5f5f5' }}
-            />
-            <ScrollView style={{ maxHeight: 300 }}>
-              {filteredCustomers.map((c) => (
-                <TouchableOpacity key={c.uid} onPress={() => handleSelectCustomer(c)}>
-                  <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}>
-                    <Text variant="titleMedium">{c.name}</Text>
-                    <Text variant="bodySmall" style={{ color: '#757575' }}>{c.email}</Text>
-                    <Text variant="bodySmall" style={{ color: c.currentDebt > 0 ? '#F44336' : '#4CAF50' }}>
-                      Utang: {formatCurrency(c.currentDebt)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-              {filteredCustomers.length === 0 && (
-                <Text style={{ textAlign: 'center', padding: 20, color: '#999' }}>Tidak ditemukan</Text>
-              )}
-            </ScrollView>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setDialogVisible(false)}>Batal</Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
-
-      {/* Success Dialog */}
-      <Portal>
-        <Dialog visible={successVisible} onDismiss={() => setSuccessVisible(false)} dismissable={false}>
-          <Dialog.Icon icon="check-circle" size={50} color="#4CAF50" />
-          <Dialog.Title style={{ textAlign: 'center' }}>Transaksi Berhasil</Dialog.Title>
-          <Dialog.Content>
-            <Text variant="bodyMedium" style={{ textAlign: 'center' }}>
-              Data transaksi telah berhasil disimpan ke database. Saldo nasabah telah diperbarui.
+        {/* Step 2: Select Product OR Input Payment */}
+        {step === 2 && (
+          <View style={styles.stepContainer}>
+            <Text variant="titleMedium" style={styles.stepTitle}>
+                {isPaymentMode ? 'Langkah 2: Input Pembayaran' : 'Langkah 2: Pilih Produk'}
             </Text>
-          </Dialog.Content>
-          <Dialog.Actions style={{ justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 20 }}>
-            <Button onPress={() => router.back()} mode="outlined" textColor="#757575">
-              Kembali
-            </Button>
-            <Button onPress={() => setSuccessVisible(false)} mode="contained" buttonColor="#4CAF50">
-              Transaksi Baru
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+            
+            {isPaymentMode ? (
+                <ScrollView>
+                    <Card style={{marginBottom: 16}}>
+                        <Card.Title title="Info Pelanggan" />
+                        <Card.Content>
+                            <Text variant="titleMedium">{selectedCustomer?.name}</Text>
+                            <Text variant="bodyMedium" style={{color: (selectedCustomer?.currentDebt || 0) > 0 ? '#D32F2F' : '#388E3C', fontWeight:'bold'}}>
+                                Total Utang: {formatCurrency(selectedCustomer?.currentDebt || 0)}
+                            </Text>
+                        </Card.Content>
+                    </Card>
 
-      {/* Error/Warning Dialog */}
-      <Portal>
-        <Dialog visible={errorVisible} onDismiss={() => setErrorVisible(false)}>
-          <Dialog.Icon icon={errorIcon} size={50} color={errorColor} />
-          <Dialog.Title style={{ textAlign: 'center', color: errorColor }}>{errorTitle}</Dialog.Title>
-          <Dialog.Content>
-            <Text variant="bodyMedium" style={{ textAlign: 'center' }}>{errorMessage}</Text>
-          </Dialog.Content>
-          <Dialog.Actions style={{ justifyContent: 'center', paddingBottom: 20 }}>
-            <Button onPress={() => setErrorVisible(false)} mode="contained" buttonColor={errorColor} style={{ minWidth: 100 }}>
-              Mengerti
+                    <TextInput
+                        label="Jumlah Pembayaran"
+                        value={paymentAmount}
+                        onChangeText={setPaymentAmount}
+                        keyboardType="numeric"
+                        mode="outlined"
+                        style={{marginBottom: 16, backgroundColor:'#fff'}}
+                        left={<TextInput.Affix text="Rp" />}
+                    />
+
+                    <TextInput
+                        label="Catatan (Opsional)"
+                        value={paymentNotes}
+                        onChangeText={setPaymentNotes}
+                        mode="outlined"
+                        style={{marginBottom: 24, backgroundColor:'#fff'}}
+                        multiline
+                    />
+
+                    <Button 
+                        mode="contained" 
+                        onPress={handlePaymentSubmit}
+                        loading={processing}
+                        disabled={!paymentAmount || processing}
+                        style={{paddingVertical: 6}}
+                    >
+                        Simpan Pembayaran
+                    </Button>
+                </ScrollView>
+            ) : (
+                <>
+                    <Searchbar
+                        placeholder="Cari produk..."
+                        onChangeText={setProductSearch}
+                        value={productSearch}
+                        style={styles.searchBar}
+                    />
+                    <FlatList
+                        data={filteredProducts}
+                        keyExtractor={item => item.id}
+                        contentContainerStyle={{paddingBottom: 20}}
+                        renderItem={({item}) => (
+                            <TouchableOpacity 
+                                onPress={() => { 
+                                    if(item.stock > 0) {
+                                        setSelectedProduct(item); 
+                                        setStep(3); 
+                                    } else {
+                                        Alert.alert("Stok Habis", "Produk ini tidak tersedia.");
+                                    }
+                                }}
+                                disabled={item.stock < 1}
+                            >
+                                <Card style={[styles.cardItem, item.stock < 1 && {opacity: 0.6}]}>
+                                    <Card.Content style={{flexDirection:'row', alignItems:'center'}}>
+                                        {item.imageUrl && (
+                                            <Image source={{uri: item.imageUrl}} style={{width: 50, height: 50, borderRadius: 4, marginRight: 12}} />
+                                        )}
+                                        <View style={{flex:1}}>
+                                            <Text variant="titleMedium">{item.name}</Text>
+                                            <Text variant="bodySmall" style={{color: item.stock < 5 ? '#D32F2F' : '#666', fontWeight: item.stock < 5 ? 'bold' : 'normal'}}>
+                                                Stok: {item.stock} {item.stock < 5 ? '(Menipis!)' : ''}
+                                            </Text>
+                                            <Text variant="titleSmall" style={{color:'#1976D2'}}>{formatCurrency(item.priceCash)} (Cash)</Text>
+                                        </View>
+                                    </Card.Content>
+                                </Card>
+                            </TouchableOpacity>
+                        )}
+                    />
+                </>
+            )}
+          </View>
+        )}
+
+        {/* Step 3: Calculation & Confirmation */}
+        {step === 3 && !isPaymentMode && selectedProduct && selectedCustomer && creditSettings && (
+          <ScrollView contentContainerStyle={{padding: 16, paddingBottom: 40}}>
+            <Card style={{marginBottom: 16}}>
+                <Card.Title title="Rincian Transaksi" subtitle={`Pelanggan: ${selectedCustomer.name}`} />
+                <Card.Content>
+                    <View style={styles.row}>
+                        <Text>Produk:</Text>
+                        <Text style={{fontWeight:'bold'}}>{selectedProduct.name}</Text>
+                    </View>
+                    <View style={styles.row}>
+                        <Text>Harga Cash:</Text>
+                        <Text>{formatCurrency(selectedProduct.priceCash)}</Text>
+                    </View>
+                    <View style={styles.row}>
+                        <Text>Harga Kredit (+{(creditCalculation?.markupUsed || 0)}%):</Text>
+                        <Text style={{fontWeight:'bold', color:'#1976D2'}}>{formatCurrency(creditCalculation?.creditPriceTotal || 0)}</Text>
+                    </View>
+                </Card.Content>
+            </Card>
+
+            <Text variant="titleMedium" style={{marginBottom: 8}}>Opsi Cicilan</Text>
+            <SegmentedButtons
+                value={tenorType}
+                onValueChange={val => {
+                    setTenorType(val as 'weekly' | 'monthly' | 'daily');
+                    setSelectedTenor(null);
+                    setCustomTenor('');
+                }}
+                buttons={[
+                    { value: 'weekly', label: 'Mingguan' },
+                    { value: 'monthly', label: 'Bulanan' },
+                    { value: 'daily', label: 'Harian' },
+                ]}
+                style={{marginBottom: 16}}
+            />
+
+            {tenorType === 'daily' ? (
+                <View style={{marginBottom: 16}}>
+                     <TextInput
+                        label="Jumlah Hari (Cicilan Bebas)"
+                        value={customTenor}
+                        onChangeText={(text) => {
+                            setCustomTenor(text);
+                            const val = parseInt(text);
+                            if (val > 0) setSelectedTenor(val);
+                            else setSelectedTenor(null);
+                        }}
+                        keyboardType="number-pad"
+                        mode="outlined"
+                        style={{backgroundColor: '#fff'}}
+                        right={<TextInput.Affix text="Hari" />}
+                    />
+                    <Text variant="bodySmall" style={{color: '#666', marginTop: 4}}>
+                        Masukkan jumlah hari untuk cicilan harian bebas.
+                    </Text>
+                </View>
+            ) : (
+                <View style={{flexDirection:'row', flexWrap:'wrap', gap: 8, marginBottom: 16}}>
+                    {(tenorType === 'weekly' ? creditSettings.availableTenors.weekly : creditSettings.availableTenors.monthly).map((t) => (
+                        <Chip 
+                            key={t} 
+                            selected={selectedTenor === t} 
+                            onPress={() => setSelectedTenor(t)}
+                            mode="outlined"
+                            showSelectedOverlay
+                        >
+                            {t}x ({tenorType === 'weekly' ? 'Minggu' : 'Bulan'})
+                        </Chip>
+                    ))}
+                </View>
+            )}
+
+            <TextInput
+                label="Uang Muka (DP)"
+                value={downPayment}
+                onChangeText={setDownPayment}
+                keyboardType="numeric"
+                mode="outlined"
+                style={{marginBottom: 16, backgroundColor:'#fff'}}
+                left={<TextInput.Affix text="Rp" />}
+            />
+            
+            {creditCalculation && selectedTenor && (
+                <Card style={{marginBottom: 16, backgroundColor:'#E3F2FD'}}>
+                    <Card.Content>
+                        <Text variant="titleMedium" style={{textAlign:'center', marginBottom: 8}}>Simulasi Pembayaran</Text>
+                        <Divider style={{marginBottom: 8}} />
+                        <View style={styles.row}>
+                            <Text>Pokok Utang:</Text>
+                            <Text>{formatCurrency(creditCalculation.principal)}</Text>
+                        </View>
+                        <View style={styles.row}>
+                            <Text>Angsuran per {tenorType === 'weekly' ? 'Minggu' : tenorType === 'daily' ? 'Hari' : 'Bulan'}:</Text>
+                            <Text style={{fontWeight:'bold', fontSize: 18, color:'#D32F2F'}}>
+                                {formatCurrency(creditCalculation.installment)}
+                            </Text>
+                        </View>
+                        <View style={styles.row}>
+                            <Text>Jatuh Tempo Pertama:</Text>
+                            <Text style={{fontWeight:'bold'}}>{getNextDueDate(tenorType)}</Text>
+                        </View>
+                        <Text style={{textAlign:'center', marginTop: 8, fontSize: 12, color:'#666'}}>
+                            x {selectedTenor} kali pembayaran
+                        </Text>
+                        <Button mode="text" compact onPress={() => setScheduleDialogVisible(true)} style={{marginTop: 4}}>
+                            Lihat Jadwal Lengkap
+                        </Button>
+                        <Button mode="contained-tonal" icon="printer" onPress={generatePDF} style={{marginTop: 8}}>
+                            Cetak Simulasi / Surat Perjanjian
+                        </Button>
+                    </Card.Content>
+                </Card>
+            )}
+
+            <Portal>
+                <Dialog visible={scheduleDialogVisible} onDismiss={() => setScheduleDialogVisible(false)}>
+                    <Dialog.Title>Jadwal Pembayaran</Dialog.Title>
+                    <Dialog.ScrollArea style={{maxHeight: 300, paddingHorizontal: 0}}>
+                        <ScrollView contentContainerStyle={{paddingHorizontal: 24}}>
+                            {selectedTenor && getFullSchedule(tenorType, selectedTenor).map((item) => (
+                                <View key={item.installment} style={{flexDirection:'row', justifyContent:'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#eee'}}>
+                                    <Text>Cicilan ke-{item.installment}</Text>
+                                    <Text style={{fontWeight:'bold'}}>{item.date}</Text>
+                                </View>
+                            ))}
+                        </ScrollView>
+                    </Dialog.ScrollArea>
+                    <Dialog.Actions>
+                        <Button onPress={() => setScheduleDialogVisible(false)}>Tutup</Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
+
+            <TextInput
+                label="Catatan (Opsional)"
+                value={notes}
+                onChangeText={setNotes}
+                mode="outlined"
+                style={{marginBottom: 16, backgroundColor:'#fff'}}
+                multiline
+            />
+
+            <Card style={{marginBottom: 24, borderColor: '#ddd'}} mode="outlined">
+                <Card.Content>
+                    <Text variant="titleMedium" style={{marginBottom: 8}}>Syarat & Ketentuan</Text>
+                    <Text variant="bodySmall" style={{color: '#666', marginBottom: 4}}>1. Barang yang sudah dibeli tidak dapat dikembalikan.</Text>
+                    <Text variant="bodySmall" style={{color: '#666', marginBottom: 4}}>2. Pembayaran angsuran wajib dilakukan tepat waktu sesuai jadwal.</Text>
+                    <Text variant="bodySmall" style={{color: '#666', marginBottom: 4}}>3. Hak milik barang beralih ke pembeli setelah lunas.</Text>
+                    
+                    <View style={{flexDirection:'row', alignItems:'center', marginTop: 8}}>
+                        <Checkbox.Android status={agreedToTerms ? 'checked' : 'unchecked'} onPress={() => setAgreedToTerms(!agreedToTerms)} />
+                        <Text onPress={() => setAgreedToTerms(!agreedToTerms)} style={{flex: 1}}>
+                            Saya, <Text style={{fontWeight: 'bold'}}>{selectedCustomer.name}</Text>, menyetujui syarat & ketentuan di atas
+                        </Text>
+                    </View>
+                </Card.Content>
+            </Card>
+
+            {/* Success Modal */}
+            <Portal>
+                <Dialog visible={successModalVisible} onDismiss={() => setSuccessModalVisible(false)} dismissable={false}>
+                    <Dialog.Icon icon="check-circle" size={50} color="#4CAF50" />
+                    <Dialog.Title style={{textAlign:'center', color: '#4CAF50'}}>Transaksi Berhasil</Dialog.Title>
+                    <Dialog.Content>
+                        <Text style={{textAlign:'center', marginBottom: 10}}>
+                            {isPaymentMode ? 'Pembayaran telah berhasil dicatat.' : 'Transaksi kredit telah berhasil dicatat ke dalam sistem.'}
+                        </Text>
+                        <View style={{backgroundColor:'#f5f5f5', padding: 10, borderRadius: 8}}>
+                             {isPaymentMode ? (
+                                <View style={styles.row}>
+                                    <Text variant="bodySmall">Jumlah Bayar:</Text>
+                                    <Text variant="bodySmall" style={{fontWeight:'bold'}}>{formatCurrency(parseInt(paymentAmount) || 0)}</Text>
+                                </View>
+                             ) : (
+                                <>
+                                    <View style={styles.row}>
+                                        <Text variant="bodySmall">ID Transaksi:</Text>
+                                        <Text variant="bodySmall" style={{fontWeight:'bold'}}>{lastTransactionId}</Text>
+                                    </View>
+                                    <View style={styles.row}>
+                                        <Text variant="bodySmall">Total Kredit:</Text>
+                                        <Text variant="bodySmall" style={{fontWeight:'bold'}}>{formatCurrency(creditCalculation?.creditPriceTotal || 0)}</Text>
+                                    </View>
+                                </>
+                             )}
+                        </View>
+                    </Dialog.Content>
+                    <Dialog.Actions style={{justifyContent: 'center'}}>
+                        <Button mode="contained" onPress={() => {
+                            setSuccessModalVisible(false);
+                            // Reset form
+                            setStep(1);
+                            setSelectedCustomer(null);
+                            setSelectedProduct(null);
+                            setSelectedTenor(null);
+                            setDownPayment('');
+                            setNotes('');
+                            setAgreedToTerms(false);
+                            setCustomTenor('');
+                            setTenorType('weekly');
+                            // Payment Reset
+                            setPaymentAmount('');
+                            setPaymentNotes('');
+                            // Reload data
+                            loadInitialData();
+                            router.replace('/(admin)');
+                        }}>OK</Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
+
+            {/* Error Modal */}
+            <Portal>
+                <Dialog visible={errorModalVisible} onDismiss={() => setErrorModalVisible(false)}>
+                    <Dialog.Icon icon="alert-circle" size={50} color="#F44336" />
+                    <Dialog.Title style={{textAlign:'center', color: '#F44336'}}>Gagal Mencatat Transaksi</Dialog.Title>
+                    <Dialog.Content>
+                         <Text style={{textAlign:'center', marginBottom: 10}}>
+                            Maaf, terjadi kesalahan saat memproses transaksi.
+                        </Text>
+                        <Text style={{textAlign:'center', color: '#666', fontSize: 12}}>
+                            Detail Error: {errorDetails}
+                        </Text>
+                    </Dialog.Content>
+                    <Dialog.Actions>
+                        <Button onPress={() => setErrorModalVisible(false)} textColor="#666">Batal</Button>
+                        <Button mode="contained" buttonColor="#F44336" onPress={() => {
+                            setErrorModalVisible(false);
+                            handleSubmit(); // Retry
+                        }}>Coba Lagi</Button>
+                    </Dialog.Actions>
+                </Dialog>
+            </Portal>
+
+            <Button 
+                mode="contained" 
+                onPress={handleSubmit} 
+                disabled={!selectedTenor || processing || !agreedToTerms}
+                loading={processing}
+                style={{paddingVertical: 6}}
+            >
+                Buat Transaksi
             </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+
+          </ScrollView>
+        )}
+      </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    stepContainer: { flex: 1, padding: 16 },
+    stepTitle: { marginBottom: 16, fontWeight: 'bold', color:'#333' },
+    searchBar: { marginBottom: 16, backgroundColor: '#fff' },
+    cardItem: { marginBottom: 8, backgroundColor: '#fff' },
+    row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+});
