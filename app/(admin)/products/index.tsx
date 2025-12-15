@@ -232,14 +232,20 @@ export default function AdminProductListScreen() {
       if (editingProduct) {
         // Handle Stock Update with History
         if (stock !== editingProduct.stock) {
-             await updateProductStock(editingProduct.id, stock, user?.id || 'admin', 'Update Manual via Admin');
+             await updateProductStock(
+                editingProduct.id, 
+                stock, 
+                user?.id || 'admin', 
+                'Update Manual via Admin',
+                user?.name || 'Admin'
+             );
              delete productData.stock; 
         }
 
         await updateProduct(editingProduct.id, productData);
         setSnackbarMessage('Produk berhasil diperbarui');
       } else {
-        await createProduct(productData, user?.id || 'admin');
+        await createProduct(productData, user?.id || 'admin', user?.name || 'Admin');
         setSnackbarMessage('Produk berhasil ditambahkan');
       }
 

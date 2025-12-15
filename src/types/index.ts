@@ -89,6 +89,7 @@ export interface StockHistory {
   referenceId?: string; // transactionId or null
   notes?: string;
   updatedBy: string; // userId or name
+  updatedByName?: string;
   createdAt: any;
 }
 

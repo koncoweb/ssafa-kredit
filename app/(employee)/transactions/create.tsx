@@ -2,22 +2,19 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { ScrollView, View, Alert, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
 import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, SegmentedButtons, ActivityIndicator, Chip, Checkbox } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { generateAgreementPDF } from '../../src/services/printService';
-import { getAllCustomers, CustomerData } from '../../src/services/firestore';
-import { getProducts, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../src/services/productService';
-import { createCreditTransaction, processPayment, getCreditTransactionsReport } from '../../src/services/transactionService';
-import { Product, CreditSettings, Customer } from '../../src/types';
-import { useAuthStore } from '../../src/store/authStore';
+import { generateAgreementPDF } from '../../../src/services/printService';
+import { getAllCustomers, CustomerData } from '../../../src/services/firestore';
+import { getProducts, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../../src/services/productService';
+import { createCreditTransaction } from '../../../src/services/transactionService';
+import { Product, CreditSettings } from '../../../src/types';
+import { useAuthStore } from '../../../src/store/authStore';
 
 const formatCurrency = (val: number) => {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
 };
 
-export default function CreditTransactionScreen() {
+export default function EmployeeTransactionScreen() {
   const router = useRouter();
-  const { mode } = useLocalSearchParams();
-  const isPaymentMode = mode === 'payment';
-
   const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Select Customer, 2: Select Product, 3: Details & Confirm
 
   // Data
@@ -36,12 +33,6 @@ export default function CreditTransactionScreen() {
   const [downPayment, setDownPayment] = useState<string>('');
   const [notes, setNotes] = useState('');
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  
-  // Payment State
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentNotes, setPaymentNotes] = useState('');
-  const [nextDueAmount, setNextDueAmount] = useState<number | null>(null);
-  const [nextDueLabel, setNextDueLabel] = useState<string>('');
 
   // Search State
   const [customerSearch, setCustomerSearch] = useState('');
@@ -59,47 +50,11 @@ export default function CreditTransactionScreen() {
   const [errorModalVisible, setErrorModalVisible] = useState(false);
   const [errorDetails, setErrorDetails] = useState('');
   const [lastTransactionId, setLastTransactionId] = useState('');
+  const [scheduleDialogVisible, setScheduleDialogVisible] = useState(false);
 
   useEffect(() => {
     loadInitialData();
   }, []);
-
-  const generatePDF = async () => {
-    if (!selectedCustomer || !selectedProduct || !creditCalculation || !selectedTenor) return;
-
-    try {
-      const schedule = getFullSchedule(tenorType, selectedTenor);
-      
-      await generateAgreementPDF({
-        customer: {
-          name: selectedCustomer.name,
-          id: selectedCustomer.uid, // Using UID as ID placeholder if KTP not available
-          address: selectedCustomer.address || '-',
-          phone: selectedCustomer.phone || '-'
-        },
-        product: {
-          name: selectedProduct.name,
-          priceCash: selectedProduct.priceCash
-        },
-        transaction: {
-          priceCredit: creditCalculation.creditPriceTotal,
-          downPayment: parseInt(downPayment) || 0,
-          principal: creditCalculation.principal,
-          tenorType: tenorType,
-          tenorCount: selectedTenor,
-          installmentAmount: creditCalculation.installment,
-          markupPercentage: creditCalculation.markupUsed
-        },
-        schedule: schedule.map(s => ({
-          installment: s.installment,
-          date: s.date
-        })),
-        officerName: user?.name || 'Petugas'
-      });
-    } catch (error) {
-      Alert.alert("Error", "Gagal mencetak dokumen");
-    }
-  };
 
   const loadInitialData = async () => {
     try {
@@ -119,36 +74,6 @@ export default function CreditTransactionScreen() {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    const loadNextDue = async () => {
-      if (!isPaymentMode || step !== 2 || !selectedCustomer) {
-        setNextDueAmount(null);
-        setNextDueLabel('');
-        return;
-      }
-      try {
-        const txs = await getCreditTransactionsReport({ customerId: selectedCustomer.uid });
-        let minAmount: number | null = null;
-        let label = '';
-        txs.forEach((tx: any) => {
-          const next = (tx.installments || []).find((i: any) => i.status !== 'paid');
-          if (next) {
-            if (minAmount === null || next.amount < minAmount) {
-              minAmount = next.amount;
-              label = `Cicilan berikutnya: ${formatCurrency(next.amount)} pada ${next.dueDate?.toDate?.()?.toLocaleDateString('id-ID') || '-'}`;
-            }
-          }
-        });
-        setNextDueAmount(minAmount);
-        setNextDueLabel(label);
-      } catch (e) {
-        setNextDueAmount(null);
-        setNextDueLabel('');
-      }
-    };
-    loadNextDue();
-  }, [isPaymentMode, step, selectedCustomer]);
 
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()));
@@ -197,7 +122,6 @@ export default function CreditTransactionScreen() {
     return nextDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
   };
 
-  const [scheduleDialogVisible, setScheduleDialogVisible] = useState(false);
   const getFullSchedule = (type: 'weekly' | 'monthly' | 'daily', count: number) => {
     const today = new Date();
     const principal = creditCalculation?.principal || 0;
@@ -223,35 +147,40 @@ export default function CreditTransactionScreen() {
     return items;
   };
 
-  const handlePaymentSubmit = async () => {
-    if (!selectedCustomer || !paymentAmount) return;
+  const generatePDF = async () => {
+    if (!selectedCustomer || !selectedProduct || !creditCalculation || !selectedTenor) return;
 
-    const pay = parseInt(paymentAmount);
-    if (!pay || pay <= 0) {
-      Alert.alert("Validasi", "Jumlah pembayaran harus lebih dari 0.");
-      return;
-    }
-    if ((selectedCustomer.totalDebt || 0) < pay) {
-      Alert.alert("Validasi", "Jumlah pembayaran melebihi total utang pelanggan.");
-      return;
-    }
-
-    setProcessing(true);
     try {
-        await processPayment({
-            customerId: selectedCustomer.uid,
-            customerName: selectedCustomer.name,
-            amount: pay,
-            notes: paymentNotes,
-            collectorId: user?.id || 'unknown',
-            collectorName: user?.name || 'Unknown'
-        });
-        setSuccessModalVisible(true);
-    } catch (e: any) {
-        setErrorDetails(e.message || "Gagal mencatat pembayaran");
-        setErrorModalVisible(true);
-    } finally {
-        setProcessing(false);
+      const schedule = getFullSchedule(tenorType, selectedTenor);
+      
+      await generateAgreementPDF({
+        customer: {
+          name: selectedCustomer.name,
+          id: selectedCustomer.uid, 
+          address: selectedCustomer.address || '-',
+          phone: selectedCustomer.phone || '-'
+        },
+        product: {
+          name: selectedProduct.name,
+          priceCash: selectedProduct.priceCash
+        },
+        transaction: {
+          priceCredit: creditCalculation.creditPriceTotal,
+          downPayment: parseInt(downPayment) || 0,
+          principal: creditCalculation.principal,
+          tenorType: tenorType,
+          tenorCount: selectedTenor,
+          installmentAmount: creditCalculation.installment,
+          markupPercentage: creditCalculation.markupUsed
+        },
+        schedule: schedule.map(s => ({
+          installment: s.installment,
+          date: s.date
+        })),
+        officerName: user?.name || 'Petugas'
+      });
+    } catch (error) {
+      Alert.alert("Error", "Gagal mencetak dokumen");
     }
   };
 
@@ -278,7 +207,7 @@ export default function CreditTransactionScreen() {
     try {
         const newTransactionId = await createCreditTransaction({
             customer: {
-                id: selectedCustomer.uid, // Use uid from CustomerData
+                id: selectedCustomer.uid, 
                 name: selectedCustomer.name,
                 address: selectedCustomer.address || '',
                 phone: selectedCustomer.phone || '',
@@ -294,7 +223,7 @@ export default function CreditTransactionScreen() {
             approvedBy: {
               id: user?.id || 'unknown',
               name: user?.name || 'Unknown User',
-              role: user?.role || 'admin'
+              role: user?.role || 'employee'
             }
         });
 
@@ -315,7 +244,10 @@ export default function CreditTransactionScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
       <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
-        {step > 1 && <Appbar.BackAction onPress={() => setStep(prev => (prev - 1) as 1|2|3)} />}
+        <Appbar.BackAction onPress={() => {
+            if (step > 1) setStep(prev => (prev - 1) as 1|2|3);
+            else router.back();
+        }} />
         <Appbar.Content title="Transaksi Kredit Baru" />
       </Appbar.Header>
 
@@ -351,112 +283,55 @@ export default function CreditTransactionScreen() {
           </View>
         )}
 
-        {/* Step 2: Select Product OR Input Payment */}
+        {/* Step 2: Select Product */}
         {step === 2 && (
           <View style={styles.stepContainer}>
-            <Text variant="titleMedium" style={styles.stepTitle}>
-                {isPaymentMode ? 'Langkah 2: Input Pembayaran' : 'Langkah 2: Pilih Produk'}
-            </Text>
+            <Text variant="titleMedium" style={styles.stepTitle}>Langkah 2: Pilih Produk</Text>
             
-            {isPaymentMode ? (
-                <ScrollView>
-                    <Card style={{marginBottom: 16}}>
-                        <Card.Title title="Info Pelanggan" />
-                        <Card.Content>
-                            <Text variant="titleMedium">{selectedCustomer?.name}</Text>
-                            <Text variant="bodyMedium" style={{color: (selectedCustomer?.totalDebt || 0) > 0 ? '#D32F2F' : '#388E3C', fontWeight:'bold'}}>
-                                Total Utang: {formatCurrency(selectedCustomer?.totalDebt || 0)}
-                            </Text>
-                        </Card.Content>
-                    </Card>
-
-                    <TextInput
-                        label="Jumlah Pembayaran"
-                        value={paymentAmount}
-                        onChangeText={setPaymentAmount}
-                        keyboardType="numeric"
-                        mode="outlined"
-                        style={{marginBottom: 16, backgroundColor:'#fff'}}
-                        left={<TextInput.Affix text="Rp" />}
-                    />
-                    {nextDueLabel ? (
-                      <Text variant="bodySmall" style={{ color: '#666', marginBottom: 8 }}>
-                        {nextDueLabel}
-                      </Text>
-                    ) : null}
-                    {nextDueAmount && parseInt(paymentAmount || '0') > 0 && parseInt(paymentAmount || '0') < nextDueAmount ? (
-                      <Text variant="bodySmall" style={{ color: '#D32F2F', marginBottom: 8 }}>
-                        Pembayaran parsial: cicilan belum dianggap lunas. Sistem harian tetap diperbolehkan.
-                      </Text>
-                    ) : null}
-
-                    <TextInput
-                        label="Catatan (Opsional)"
-                        value={paymentNotes}
-                        onChangeText={setPaymentNotes}
-                        mode="outlined"
-                        style={{marginBottom: 24, backgroundColor:'#fff'}}
-                        multiline
-                    />
-
-                    <Button 
-                        mode="contained" 
-                        onPress={handlePaymentSubmit}
-                        loading={processing}
-                        disabled={!paymentAmount || processing}
-                        style={{paddingVertical: 6}}
+            <Searchbar
+                placeholder="Cari produk..."
+                onChangeText={setProductSearch}
+                value={productSearch}
+                style={styles.searchBar}
+            />
+            <FlatList
+                data={filteredProducts}
+                keyExtractor={item => item.id}
+                contentContainerStyle={{paddingBottom: 20}}
+                renderItem={({item}) => (
+                    <TouchableOpacity 
+                        onPress={() => { 
+                            if(item.stock > 0) {
+                                setSelectedProduct(item); 
+                                setStep(3); 
+                            } else {
+                                Alert.alert("Stok Habis", "Produk ini tidak tersedia.");
+                            }
+                        }}
+                        disabled={item.stock < 1}
                     >
-                        Simpan Pembayaran
-                    </Button>
-                </ScrollView>
-            ) : (
-                <>
-                    <Searchbar
-                        placeholder="Cari produk..."
-                        onChangeText={setProductSearch}
-                        value={productSearch}
-                        style={styles.searchBar}
-                    />
-                    <FlatList
-                        data={filteredProducts}
-                        keyExtractor={item => item.id}
-                        contentContainerStyle={{paddingBottom: 20}}
-                        renderItem={({item}) => (
-                            <TouchableOpacity 
-                                onPress={() => { 
-                                    if(item.stock > 0) {
-                                        setSelectedProduct(item); 
-                                        setStep(3); 
-                                    } else {
-                                        Alert.alert("Stok Habis", "Produk ini tidak tersedia.");
-                                    }
-                                }}
-                                disabled={item.stock < 1}
-                            >
-                                <Card style={[styles.cardItem, item.stock < 1 && {opacity: 0.6}]}>
-                                    <Card.Content style={{flexDirection:'row', alignItems:'center'}}>
-                                        {item.imageUrl && (
-                                            <Image source={{uri: item.imageUrl}} style={{width: 50, height: 50, borderRadius: 4, marginRight: 12}} />
-                                        )}
-                                        <View style={{flex:1}}>
-                                            <Text variant="titleMedium">{item.name}</Text>
-                                            <Text variant="bodySmall" style={{color: item.stock < 5 ? '#D32F2F' : '#666', fontWeight: item.stock < 5 ? 'bold' : 'normal'}}>
-                                                Stok: {item.stock} {item.stock < 5 ? '(Menipis!)' : ''}
-                                            </Text>
-                                            <Text variant="titleSmall" style={{color:'#1976D2'}}>{formatCurrency(item.priceCash)} (Cash)</Text>
-                                        </View>
-                                    </Card.Content>
-                                </Card>
-                            </TouchableOpacity>
-                        )}
-                    />
-                </>
-            )}
+                        <Card style={[styles.cardItem, item.stock < 1 && {opacity: 0.6}]}>
+                            <Card.Content style={{flexDirection:'row', alignItems:'center'}}>
+                                {item.imageUrl && (
+                                    <Image source={{uri: item.imageUrl}} style={{width: 50, height: 50, borderRadius: 4, marginRight: 12}} />
+                                )}
+                                <View style={{flex:1}}>
+                                    <Text variant="titleMedium">{item.name}</Text>
+                                    <Text variant="bodySmall" style={{color: item.stock < 5 ? '#D32F2F' : '#666', fontWeight: item.stock < 5 ? 'bold' : 'normal'}}>
+                                        Stok: {item.stock} {item.stock < 5 ? '(Menipis!)' : ''}
+                                    </Text>
+                                    <Text variant="titleSmall" style={{color:'#1976D2'}}>{formatCurrency(item.priceCash)} (Cash)</Text>
+                                </View>
+                            </Card.Content>
+                        </Card>
+                    </TouchableOpacity>
+                )}
+            />
           </View>
         )}
 
         {/* Step 3: Calculation & Confirmation */}
-        {step === 3 && !isPaymentMode && selectedProduct && selectedCustomer && creditSettings && (
+        {step === 3 && selectedProduct && selectedCustomer && creditSettings && (
           <ScrollView contentContainerStyle={{padding: 16, paddingBottom: 40}}>
             <Card style={{marginBottom: 16}}>
                 <Card.Title title="Rincian Transaksi" subtitle={`Pelanggan: ${selectedCustomer.name}`} />
@@ -624,26 +499,17 @@ export default function CreditTransactionScreen() {
                     <Dialog.Title style={{textAlign:'center', color: '#4CAF50'}}>Transaksi Berhasil</Dialog.Title>
                     <Dialog.Content>
                         <Text style={{textAlign:'center', marginBottom: 10}}>
-                            {isPaymentMode ? 'Pembayaran telah berhasil dicatat.' : 'Transaksi kredit telah berhasil dicatat ke dalam sistem.'}
+                            Transaksi kredit telah berhasil dicatat ke dalam sistem.
                         </Text>
                         <View style={{backgroundColor:'#f5f5f5', padding: 10, borderRadius: 8}}>
-                             {isPaymentMode ? (
-                                <View style={styles.row}>
-                                    <Text variant="bodySmall">Jumlah Bayar:</Text>
-                                    <Text variant="bodySmall" style={{fontWeight:'bold'}}>{formatCurrency(parseInt(paymentAmount) || 0)}</Text>
-                                </View>
-                             ) : (
-                                <>
-                                    <View style={styles.row}>
-                                        <Text variant="bodySmall">ID Transaksi:</Text>
-                                        <Text variant="bodySmall" style={{fontWeight:'bold'}}>{lastTransactionId}</Text>
-                                    </View>
-                                    <View style={styles.row}>
-                                        <Text variant="bodySmall">Total Kredit:</Text>
-                                        <Text variant="bodySmall" style={{fontWeight:'bold'}}>{formatCurrency(creditCalculation?.creditPriceTotal || 0)}</Text>
-                                    </View>
-                                </>
-                             )}
+                            <View style={styles.row}>
+                                <Text variant="bodySmall">ID Transaksi:</Text>
+                                <Text variant="bodySmall" style={{fontWeight:'bold'}}>{lastTransactionId}</Text>
+                            </View>
+                            <View style={styles.row}>
+                                <Text variant="bodySmall">Total Kredit:</Text>
+                                <Text variant="bodySmall" style={{fontWeight:'bold'}}>{formatCurrency(creditCalculation?.creditPriceTotal || 0)}</Text>
+                            </View>
                         </View>
                     </Dialog.Content>
                     <Dialog.Actions style={{justifyContent: 'center'}}>
@@ -659,12 +525,9 @@ export default function CreditTransactionScreen() {
                             setAgreedToTerms(false);
                             setCustomTenor('');
                             setTenorType('weekly');
-                            // Payment Reset
-                            setPaymentAmount('');
-                            setPaymentNotes('');
                             // Reload data
                             loadInitialData();
-                            router.replace('/(admin)');
+                            router.replace('/(employee)');
                         }}>OK</Button>
                     </Dialog.Actions>
                 </Dialog>

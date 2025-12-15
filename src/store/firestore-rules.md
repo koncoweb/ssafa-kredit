@@ -46,11 +46,13 @@ service cloud.firestore {
       
       // Hanya Admin & Employee yang bisa kelola data nasabah (edit limit, data diri, dll)
       // Nasabah bisa update profil sendiri (opsional, sesuaikan kebutuhan)
-      allow write: if isSignedIn() && ( 
+      // REVISION: Employee sebaiknya tidak bisa DELETE nasabah
+      allow create, update: if isSignedIn() && ( 
         request.auth.uid == customerId ||
         isAdmin() || 
         isEmployee() 
       );
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // --- Transactions (Audit Trail & Financial Records) ---
@@ -64,7 +66,9 @@ service cloud.firestore {
       
       // Hanya Admin & Employee yang bisa buat/edit transaksi
       // Krusial untuk mencatat kredit baru dan pembayaran piutang
-      allow create, update, delete: if isSignedIn() && ( isAdmin() || isEmployee() );
+      // REVISION: Employee tidak boleh DELETE transaksi (audit trail)
+      allow create, update: if isSignedIn() && ( isAdmin() || isEmployee() );
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // --- Stock History (Log Perubahan Stok Barang) ---
@@ -84,7 +88,9 @@ service cloud.firestore {
     // --- Products (Data Barang Katalog) ---
     match /products/{productId} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn() && ( isAdmin() || isEmployee() );
+      // REVISION: Employee hanya boleh UPDATE (kurangi stok), tidak boleh hapus produk
+      allow create, delete: if isSignedIn() && isAdmin();
+      allow update: if isSignedIn() && ( isAdmin() || isEmployee() );
     }
 
     // --- Settings (Pengaturan Aplikasi Global) ---

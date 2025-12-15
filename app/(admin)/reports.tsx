@@ -91,7 +91,7 @@ export default function ReportsScreen() {
   }, [period, selectedCustomer, viewMode]);
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount || 0);
   };
 
   const formatDate = (date: any) => {
@@ -115,11 +115,15 @@ export default function ReportsScreen() {
   };
 
   const getInstallmentProgress = (tx: CreditTransaction) => {
-    const paidCount = tx.installments.filter(i => i.status === 'paid').length;
+    const installments = tx.installments || [];
+    const paidCount = installments.filter(i => i.status === 'paid').length;
+    const totalCount = tx.tenorCount || 1;
+    const nextUnpaid = installments.find(i => i.status !== 'paid');
     return {
       paid: paidCount,
-      total: tx.tenorCount,
-      progress: paidCount / tx.tenorCount
+      total: totalCount,
+      progress: paidCount / totalCount,
+      nextUnpaid
     };
   };
 
@@ -226,10 +230,10 @@ export default function ReportsScreen() {
                 )}
 
                 {transactions.map((tx) => {
-                const { paid, total, progress } = getInstallmentProgress(tx);
+                const { paid, total, progress, nextUnpaid } = getInstallmentProgress(tx);
                 return (
-                    <Card key={tx.id} style={styles.txCard} mode="elevated">
-                    <Card.Content>
+                  <Card key={tx.id} style={styles.txCard} mode="elevated">
+                  <Card.Content>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
                         <View style={{ flex: 1 }}>
                             <Text variant="labelSmall" style={{ color: '#999', marginBottom: 2 }}>ID: {tx.id}</Text>
@@ -263,13 +267,23 @@ export default function ReportsScreen() {
 
                         <View>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
-                            <Text variant="bodySmall">Progress Pembayaran ({paid}/{total})</Text>
-                            <Text variant="bodySmall">{Math.round(progress * 100)}%</Text>
+                          <Text variant="bodySmall">Progress Pembayaran ({paid}/{total})</Text>
+                          <Text variant="bodySmall">{Math.round(progress * 100)}%</Text>
                         </View>
                         <ProgressBar progress={progress} color={progress === 1 ? '#4CAF50' : '#2196F3'} style={{ height: 6, borderRadius: 3 }} />
+                        {nextUnpaid ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+                            <Text variant="bodySmall">Jatuh Tempo Berikutnya</Text>
+                            <Text variant="bodySmall" style={{ fontWeight: 'bold', color: '#D32F2F' }}>
+                              {formatCurrency(nextUnpaid.amount)} • {formatDate(nextUnpaid.dueDate?.toDate?.() || nextUnpaid.dueDate)}
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text variant="bodySmall" style={{ marginTop: 6, color: '#4CAF50' }}>Semua cicilan sudah lunas</Text>
+                        )}
                         </View>
-                    </Card.Content>
-                    </Card>
+                  </Card.Content>
+                  </Card>
                 );
                 })}
             </>
@@ -307,7 +321,7 @@ export default function ReportsScreen() {
                                         </Chip>
                                     </View>
                                 </View>
-                                {item.notes ? <Text variant="bodySmall" style={{marginTop:8, fontStyle:'italic'}}>"{item.notes}"</Text> : null}
+                                {item.notes ? <Text variant="bodySmall" style={{marginTop:8, fontStyle:'italic'}}>Catatan: {item.notes}</Text> : null}
                             </Card.Content>
                         </Card>
                     )

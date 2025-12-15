@@ -5,12 +5,15 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
 import { getUserRole, setUserRole } from '../../src/services/firestore';
 import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
+import { resetDatabase } from '../../src/services/adminService';
 
 export default function SettingsPage() {
   const router = useRouter();
   const { user, logout } = useAuthStore();
   const [roleStatus, setRoleStatus] = useState<string>('checking');
   const [fixing, setFixing] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [showResetDialog, setShowResetDialog] = useState(false);
   
   // Credit Settings State
   const [creditSettings, setCreditSettings] = useState({ 
@@ -96,6 +99,25 @@ export default function SettingsPage() {
     router.replace('/(auth)/login');
   };
 
+  const confirmResetDatabase = async () => {
+    setResetting(true);
+    try {
+        await resetDatabase();
+        setShowResetDialog(false);
+        // Gunakan setTimeout agar dialog tertutup dulu baru alert sukses muncul
+        setTimeout(() => {
+            Alert.alert('Sukses', 'Database transaksi telah dibersihkan.');
+        }, 500);
+    } catch (error: any) {
+        setShowResetDialog(false);
+        setTimeout(() => {
+            Alert.alert('Gagal', 'Gagal mereset database: ' + error.message);
+        }, 500);
+    } finally {
+        setResetting(false);
+    }
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
       <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
@@ -128,13 +150,9 @@ export default function SettingsPage() {
                 title="Global Markup Kredit"
                 description={`${creditSettings.globalMarkupPercentage}%`}
                 left={props => <List.Icon {...props} icon="percent" />}
-                onPress={() => {
-                    setTempMarkup(creditSettings.globalMarkupPercentage.toString());
-                    setTempWeekly(creditSettings.availableTenors?.weekly?.join(', ') || '4, 8, 12, 16');
-                    setTempMonthly(creditSettings.availableTenors?.monthly?.join(', ') || '3, 6, 9, 12');
-                    setShowSettingsDialog(true);
-                }}
-            />
+                onPress={() => setShowSettingsDialog(true)}
+            right={props => null}
+          />
         </List.Section>
 
         <Portal>
@@ -170,16 +188,42 @@ export default function SettingsPage() {
                     <Button onPress={handleSaveSettings} loading={loadingSettings}>Simpan</Button>
                 </Dialog.Actions>
             </Dialog>
+
+            <Dialog visible={showResetDialog} onDismiss={() => !resetting && setShowResetDialog(false)}>
+                <Dialog.Title style={{ color: 'red' }}>PERINGATAN BAHAYA</Dialog.Title>
+                <Dialog.Content>
+                    <Text variant="bodyMedium">
+                        Anda akan menghapus SEMUA data transaksi, riwayat stok, dan mereset hutang nasabah menjadi 0.
+                    </Text>
+                    <Text variant="bodyMedium" style={{ marginTop: 10, fontWeight: 'bold' }}>
+                        Data yang dihapus TIDAK BISA DIKEMBALIKAN. Apakah Anda yakin?
+                    </Text>
+                </Dialog.Content>
+                <Dialog.Actions>
+                    <Button onPress={() => setShowResetDialog(false)} disabled={resetting}>Batal</Button>
+                    <Button onPress={confirmResetDatabase} loading={resetting} textColor="red">Hapus Semua Data</Button>
+                </Dialog.Actions>
+            </Dialog>
         </Portal>
 
-        <List.Section title="Sesi">
+        <Divider />
+
+        <List.Section title="Database & Sistem">
           <List.Item
-            title="Keluar"
-            left={props => <List.Icon {...props} icon="logout" />}
-            onPress={handleLogout}
+            title="Reset Database Transaksi"
+            description="Hapus semua transaksi dan reset hutang"
             titleStyle={{ color: 'red' }}
+            left={props => <List.Icon {...props} icon="delete-alert" color="red" />}
+            onPress={() => setShowResetDialog(true)}
+            right={props => resetting ? <ActivityIndicator {...props} /> : null}
           />
         </List.Section>
+
+        <View style={{ padding: 16 }}>
+          <Button mode="outlined" icon="logout" onPress={handleLogout} textColor="red" style={{ borderColor: 'red' }}>
+            Logout
+          </Button>
+        </View>
       </ScrollView>
     </View>
   );

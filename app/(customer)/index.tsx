@@ -51,7 +51,7 @@ export default function CustomerDashboard() {
           <Card.Content>
              <Text variant="titleMedium">Sisa Tagihan Anda</Text>
              <Text variant="displaySmall" style={{ color: '#d32f2f', fontWeight: 'bold' }}>
-               {customerData ? formatCurrency(customerData.currentDebt) : 'Rp 0'}
+               {customerData ? formatCurrency(customerData.totalDebt) : 'Rp 0'}
              </Text>
              <Text variant="bodySmall">Limit Kredit: {customerData ? formatCurrency(customerData.creditLimit) : '-'}</Text>
           </Card.Content>

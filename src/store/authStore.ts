@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { User, UserRole } from '../types';
 import { loginEmailAuth, registerEmailAuth } from '../services/authSdk';
-import { getUserRole, setUserRole, createCustomerProfile, createEmployeeProfile } from '../services/firestore';
+import { getUserRole, setUserRole, createCustomerProfile, createEmployeeProfile, createAdminProfile } from '../services/firestore';
 
 interface AuthState {
   user: User | null;
@@ -43,12 +43,15 @@ export const useAuthStore = create<AuthState>((set) => ({
           name: userName,
           role: 'customer',
           creditLimit: 0,
-          currentDebt: 0
+          currentDebt: 0,
+          totalDebt: 0,
+          phone: '',
+          address: ''
         });
       } else if (role === 'employee') {
         await createEmployeeProfile(fb.uid, userName, email);
       } else {
-        await setUserRole(fb.uid, role);
+        await createAdminProfile(fb.uid, userName, email);
       }
     } catch (e) {
       console.error('Error creating user profile:', e);

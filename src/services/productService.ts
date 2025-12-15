@@ -13,8 +13,7 @@ import {
   orderBy,
   serverTimestamp,
   runTransaction,
-  increment,
-  Transaction
+  increment
 } from 'firebase/firestore';
 import { Product, CreditSettings } from '../types';
 
@@ -50,8 +49,8 @@ export async function getProduct(id: string): Promise<Product | null> {
   return null;
 }
 
-export async function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, userId: string) {
-  await runTransaction(db, async (transaction: Transaction) => {
+export async function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>, userId: string, userName?: string) {
+  await runTransaction(db, async (transaction: any) => {
     const newProductRef = doc(collection(db, PRODUCTS_COLLECTION));
     
     transaction.set(newProductRef, {
@@ -73,6 +72,7 @@ export async function createProduct(data: Omit<Product, 'id' | 'createdAt' | 'up
         type: 'restock',
         notes: 'Stok Awal',
         updatedBy: userId,
+        updatedByName: userName,
         createdAt: serverTimestamp()
       });
     }
@@ -95,9 +95,10 @@ export async function updateProductStock(
   productId: string, 
   newStock: number, 
   userId: string, 
-  notes: string = ''
+  notes: string = '',
+  userName?: string
 ) {
-  await runTransaction(db, async (transaction: Transaction) => {
+  await runTransaction(db, async (transaction: any) => {
     const productRef = doc(db, PRODUCTS_COLLECTION, productId);
     const productDoc = await transaction.get(productRef);
 
@@ -128,6 +129,7 @@ export async function updateProductStock(
       type: 'manual_adjustment',
       notes,
       updatedBy: userId,
+      updatedByName: userName,
       createdAt: serverTimestamp()
     });
   });
@@ -196,5 +198,5 @@ export function calculateInstallment(
   const principal = creditPrice - dp;
   if (principal <= 0) return 0;
   if (tenorCount <= 0) return principal;
-  return principal / tenorCount;
+  return Math.floor(principal / tenorCount);
 }

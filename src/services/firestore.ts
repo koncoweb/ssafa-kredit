@@ -25,61 +25,6 @@ export async function getUserRole(uid: string): Promise<string | null> {
   return snap.exists() ? (snap.data().role as string) : null;
 }
 
-export async function processTransaction(payload: {
-  customerId: string;
-  amount: number;
-  type: 'credit' | 'payment';
-  description?: string;
-  employeeId?: string;
-}) {
-  const txRef = doc(collection(db, 'transactions'));
-  const customerRef = doc(db, 'customers', payload.customerId);
-  console.log('Running transaction on customer:', payload.customerId);
-
-  await runTransaction(db, async (transaction: any) => {
-    // 1. Get Customer Document
-    console.log('Reading customer doc...');
-    const customerDoc = await transaction.get(customerRef);
-    if (!customerDoc.exists()) {
-      throw new Error("Nasabah tidak ditemukan!");
-    }
-    console.log('Customer found, calculating debt...');
-
-    const currentDebt = customerDoc.data().currentDebt || 0;
-    const creditLimit = customerDoc.data().creditLimit || 0;
-
-    // 2. Calculate New Debt
-    let newDebt = currentDebt;
-    if (payload.type === 'credit') {
-        newDebt += payload.amount;
-        // Check Limit if set (non-zero)
-        if (creditLimit > 0 && newDebt > creditLimit) {
-             throw new Error(`Melebihi limit kredit! (Sisa limit: ${creditLimit - currentDebt})`);
-        }
-    } else {
-        newDebt -= payload.amount;
-    }
-
-    // 3. Create Transaction Document FIRST
-    console.log('Writing transaction...');
-    // Using transaction.set on a new document reference
-    transaction.set(txRef, {
-      ...payload,
-      id: txRef.id,
-      createdAt: serverTimestamp(),
-    });
-
-    // 4. Update Customer Debt SECOND
-    console.log('Updating customer debt...');
-    transaction.update(customerRef, { 
-      currentDebt: newDebt,
-      updatedAt: serverTimestamp()
-    });
-  });
-  
-  console.log('Transaction committed. ID:', txRef.id);
-  return txRef.id;
-}
 
 export async function getTransactionsReport(filters?: {
   employeeId?: string | null;
@@ -150,11 +95,11 @@ export interface CustomerData {
   name: string;
   email: string;
   role: 'customer';
-  phone?: string;
-  address?: string;
+  phone: string;
+  address: string;
   creditLimit: number;
   currentDebt: number; // Deprecated, use totalDebt
-  totalDebt?: number;
+  totalDebt: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -173,7 +118,14 @@ export async function getCustomerData(uid: string): Promise<CustomerData | null>
   const snap = await getDoc(doc(db, 'customers', uid));
   if (snap.exists()) {
     const data = snap.data();
-    return { uid: snap.id, ...data, totalDebt: data.totalDebt || data.currentDebt || 0 } as CustomerData;
+    return { 
+      uid: snap.id, 
+      ...data, 
+      phone: data.phone || '',
+      address: data.address || '',
+      totalDebt: data.totalDebt || data.currentDebt || 0,
+      currentDebt: data.currentDebt || 0
+    } as CustomerData;
   }
   return null;
 }
@@ -182,16 +134,33 @@ export async function createCustomerProfile(uid: string, data: Partial<CustomerD
   // 1. Create entry in users collection for RBAC
   await setDoc(doc(db, 'users', uid), {
     email: data.email,
+    name: data.name || '',
     role: 'customer',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }, { merge: true });
 
   // 2. Create entry in customers collection
-  await setDoc(doc(db, 'customers', uid), {
-    ...data,
+  // Ensure all fields are present to maintain consistency
+  const customerData = {
+    uid: uid,
+    name: data.name || '',
+    email: data.email || '',
+    role: 'customer',
+    phone: data.phone || '',
+    address: data.address || '',
+    creditLimit: data.creditLimit || 0,
     currentDebt: data.currentDebt || 0,
     totalDebt: data.totalDebt || 0,
+    updatedAt: serverTimestamp(),
+  };
+
+  await setDoc(doc(db, 'customers', uid), customerData, { merge: true });
+}
+
+export async function updateCustomerProfile(uid: string, data: Partial<CustomerData>) {
+  await setDoc(doc(db, 'customers', uid), {
+    ...data,
     updatedAt: serverTimestamp(),
   }, { merge: true });
 }
@@ -216,7 +185,17 @@ export async function getCustomerTransactions(uid: string) {
 export async function getAllCustomers() {
   const q = query(collection(db, 'customers'));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map((d: any) => ({ uid: d.id, ...d.data() })) as CustomerData[];
+  return snapshot.docs.map((d: any) => {
+    const data = d.data();
+    return { 
+      uid: d.id, 
+      ...data,
+      phone: data.phone || '',
+      address: data.address || '',
+      totalDebt: data.totalDebt || data.currentDebt || 0,
+      currentDebt: data.currentDebt || 0
+    };
+  }) as CustomerData[];
 }
 
 export interface EmployeeData {
@@ -266,6 +245,17 @@ export async function createEmployeeProfile(uid: string, name: string, email: st
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+export async function createAdminProfile(uid: string, name: string, email: string) {
+  await setDoc(doc(db, 'users', uid), {
+    uid,
+    name,
+    email,
+    role: 'admin',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 }
 
 export async function getAdminStats() {
