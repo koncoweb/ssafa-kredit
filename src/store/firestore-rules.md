@@ -22,17 +22,23 @@ service cloud.firestore {
 
     // --- Users Collection (RBAC Roles) ---
     match /users/{uid} {
-      // Admin dan Employee bisa baca data user untuk verifikasi
-      // User sendiri bisa baca datanya
       allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin() || isEmployee());
-      
-      // Admin bisa tulis semua (manage users)
-      // User sendiri bisa update profilnya (misal ganti nama/email)
-      // Employee hanya bisa MEMBUAT user baru dengan role 'customer' (untuk pendaftaran nasabah baru di lapangan)
       allow write: if isSignedIn() && (
-        request.auth.uid == uid || 
-        isAdmin() ||
-        (isEmployee() && resource == null && request.resource.data.role == 'customer')
+        (
+          isAdmin() &&
+          !(uid == request.auth.uid && request.resource.data.role != 'admin')
+        )
+        ||
+        (
+          request.auth.uid == uid &&
+          request.resource.data.role == resource.data.role
+        )
+        ||
+        (
+          isEmployee() &&
+          resource == null &&
+          request.resource.data.role == 'customer'
+        )
       );
     }
 

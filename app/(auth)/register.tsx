@@ -1,15 +1,14 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, Image } from 'react-native';
-import { TextInput, Button, Text, Surface, Chip } from 'react-native-paper';
+import { TextInput, Button, Text, Surface } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
-import { UserRole } from '../../src/types';
+import { } from '../../src/types';
 
 export default function RegisterScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('customer');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { registerEmail } = useAuthStore();
@@ -23,7 +22,7 @@ export default function RegisterScreen() {
         return;
       }
       setLoading(true);
-      await registerEmail(email.trim(), password, role, name.trim());
+      await registerEmail(email.trim(), password, 'customer', name.trim());
       router.replace('/');
     } catch (e: any) {
       setError(e?.message || 'Registrasi gagal');
@@ -66,12 +65,6 @@ export default function RegisterScreen() {
             style={styles.input}
           />
 
-          <Text style={styles.divider}>Daftar sebagai</Text>
-          <View style={styles.roleRow}>
-            <Chip selected={role==='admin'} onPress={() => setRole('admin')} icon="shield-crown-outline">Admin</Chip>
-            <Chip selected={role==='employee'} onPress={() => setRole('employee')} icon="account-hard-hat">Karyawan</Chip>
-            <Chip selected={role==='customer'} onPress={() => setRole('customer')} icon="account">Nasabah</Chip>
-          </View>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -110,16 +103,6 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: 16,
-  },
-  divider: {
-    textAlign: 'center',
-    marginVertical: 12,
-    color: '#aaa',
-  },
-  roleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
   },
   logo: {
     width: 64,

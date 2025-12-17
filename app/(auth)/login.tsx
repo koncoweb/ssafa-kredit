@@ -1,16 +1,14 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, Image, Alert } from 'react-native';
-import { TextInput, Button, Text, Surface, Chip, HelperText } from 'react-native-paper';
+import { TextInput, Button, Text, Surface } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../src/store/authStore';
-import { UserRole } from '../../src/types';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<UserRole>('employee');
   const [loading, setLoading] = useState(false);
-  const { loginEmail, registerEmail } = useAuthStore();
+  const { loginEmail } = useAuthStore();
   const router = useRouter();
 
   const handleLogin = async () => {
@@ -43,26 +41,6 @@ export default function LoginScreen() {
     }
   };
 
-  const handleRegister = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Email dan Password wajib diisi');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await registerEmail(email.trim(), password, role);
-      // User is already authenticated by Firebase and Store after successful registration
-      Alert.alert('Sukses', 'Akun berhasil dibuat!', [
-        { text: 'Mulai', onPress: () => router.replace('/') }
-      ]);
-    } catch (error: any) {
-      console.error('Register error:', error);
-      Alert.alert('Gagal Daftar', error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
@@ -90,12 +68,6 @@ export default function LoginScreen() {
             style={styles.input}
           />
 
-          <Text style={styles.divider}>Masuk sebagai</Text>
-          <View style={styles.roleRow}>
-            <Chip selected={role==='admin'} onPress={() => setRole('admin')} icon="shield-crown-outline">Admin</Chip>
-            <Chip selected={role==='employee'} onPress={() => setRole('employee')} icon="account-hard-hat">Karyawan</Chip>
-            <Chip selected={role==='customer'} onPress={() => setRole('customer')} icon="account">Nasabah</Chip>
-          </View>
 
           <Button 
             mode="contained" 
@@ -106,15 +78,6 @@ export default function LoginScreen() {
             disabled={loading}
           >
             Masuk
-          </Button>
-          <Button 
-            mode="outlined" 
-            onPress={handleRegister} 
-            style={styles.button} 
-            icon="account-plus"
-            disabled={loading}
-          >
-            Daftar Cepat
           </Button>
           <Button mode="text" onPress={() => router.push('/(auth)/register')} style={styles.link}>Daftar lewat halaman</Button>
         </Surface>
@@ -150,16 +113,6 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: 16,
-  },
-  divider: {
-    textAlign: 'center',
-    marginVertical: 12,
-    color: '#aaa',
-  },
-  roleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
   },
   logo: {
     width: 64,

@@ -54,6 +54,15 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="users"
+        options={{
+          title: 'Users',
+          tabBarIcon: ({ color }) => (
+            <MaterialCommunityIcons name="account-cog" size={24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="customers"
         options={{
           href: null,

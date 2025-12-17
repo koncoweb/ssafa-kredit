@@ -12,7 +12,8 @@ import {
   orderBy,
   limit,
   runTransaction,
-  increment
+  increment,
+  deleteField
 } from 'firebase/firestore';
 import { STATS_COLLECTION, STATS_FINANCIALS_DOC } from './transactionService';
 
@@ -23,6 +24,70 @@ export async function setUserRole(uid: string, role: string) {
 export async function getUserRole(uid: string): Promise<string | null> {
   const snap = await getDoc(doc(db, 'users', uid));
   return snap.exists() ? (snap.data().role as string) : null;
+}
+
+export interface UserDoc {
+  uid: string;
+  name?: string;
+  email?: string;
+  role: 'admin' | 'employee' | 'customer';
+  updatedAt?: any;
+  createdAt?: any;
+}
+
+export async function getAllUsers(): Promise<UserDoc[]> {
+  const q = query(collection(db, 'users'));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d: any) => {
+    const data = d.data();
+    return {
+      uid: d.id,
+      name: data.name || '',
+      email: data.email || '',
+      role: (data.role || 'customer') as any,
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt
+    } as UserDoc;
+  });
+}
+
+export async function changeUserRole(targetUid: string, newRole: 'admin' | 'employee' | 'customer', actorId: string, actorName?: string) {
+  await runTransaction(db, async (transaction: any) => {
+    const userRef = doc(db, 'users', targetUid);
+    const userSnap = await transaction.get(userRef);
+    const oldRole = userSnap.exists() ? (userSnap.data().role || 'customer') : null;
+    
+    transaction.set(userRef, { role: newRole, updatedAt: serverTimestamp() }, { merge: true });
+    
+    if (newRole === 'employee') {
+      transaction.set(userRef, {
+        target: 0,
+        collected: 0,
+        bonus: 0,
+        internalDebt: 0,
+        active: true
+      }, { merge: true });
+    } else {
+      transaction.update(userRef, {
+        target: deleteField(),
+        collected: deleteField(),
+        bonus: deleteField(),
+        internalDebt: deleteField(),
+        active: deleteField()
+      });
+    }
+    
+    const logRef = doc(collection(db, 'admin_logs'));
+    transaction.set(logRef, {
+      id: logRef.id,
+      userId: targetUid,
+      actorId,
+      actorName: actorName || 'Admin',
+      oldRole,
+      newRole,
+      createdAt: serverTimestamp()
+    });
+  });
 }
 
 
