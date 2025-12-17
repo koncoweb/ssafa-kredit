@@ -4,6 +4,8 @@ import { Appbar, Text, Card, List } from 'react-native-paper';
 import { useAuthStore } from '../../src/store/authStore';
 import { useRouter } from 'expo-router';
 import { getCustomerData, getCustomerTransactions, CustomerData, Transaction } from '../../src/services/firestore';
+import { HomeHeader } from '../../src/components/home/HomeHeader';
+import { ShortcutGrid } from '../../src/components/home/ShortcutGrid';
 
 export default function CustomerDashboard() {
   const { user, logout } = useAuthStore();
@@ -37,10 +39,7 @@ export default function CustomerDashboard() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
-      <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
-        <Appbar.Content title="Info Tagihan" />
-        <Appbar.Action icon="logout" onPress={() => { logout(); router.replace('/(auth)/login'); }} />
-      </Appbar.Header>
+      <HomeHeader title="Beranda Nasabah" />
       <ScrollView 
         contentContainerStyle={{ padding: 20 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -60,6 +59,10 @@ export default function CustomerDashboard() {
         <Card style={{ marginTop: 20 }} mode="outlined" onPress={() => router.push('/(customer)/products' as any)}>
           <Card.Title title="Katalog Produk" subtitle="Lihat produk dan simulasi kredit" left={props => <List.Icon {...props} icon="shopping" />} />
         </Card>
+        <ShortcutGrid items={[
+          { label: 'Katalog', icon: 'shopping', route: '/(customer)/products' },
+          { label: 'Riwayat', icon: 'history', route: '/(customer)/history' }
+        ]} />
 
         <Text variant="titleMedium" style={{ marginTop: 20, marginBottom: 10, color: '#333' }}>Riwayat Transaksi</Text>
         <Card>

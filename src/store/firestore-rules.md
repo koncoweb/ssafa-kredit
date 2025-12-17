@@ -93,7 +93,8 @@ service cloud.firestore {
 
     // --- Products (Data Barang Katalog) ---
     match /products/{productId} {
-      allow read: if isSignedIn();
+      // Public read access for catalog browsing; write remains restricted
+      allow read: if true;
       // REVISION: Employee hanya boleh UPDATE (kurangi stok), tidak boleh hapus produk
       allow create, delete: if isSignedIn() && isAdmin();
       allow update: if isSignedIn() && ( isAdmin() || isEmployee() );

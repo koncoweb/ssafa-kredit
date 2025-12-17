@@ -6,6 +6,7 @@ import { useAuthStore } from '../../../src/store/authStore';
 import { processPayment } from '../../../src/services/transactionService';
 import { searchCustomers, getCustomers } from '../../../src/services/customerService';
 import { Customer } from '../../../src/types';
+import { isOnline, enqueue } from '../../../src/services/offline';
 
 export default function CreatePaymentScreen() {
   const theme = useTheme();
@@ -78,18 +79,37 @@ export default function CreatePaymentScreen() {
 
     setLoading(true);
     try {
-      await processPayment({
-        customerId: selectedCustomer.id,
-        customerName: selectedCustomer.name,
-        amount: numericAmount,
-        notes: notes,
-        collectorId: user.id,
-        collectorName: user.name
-      });
-
-      Alert.alert('Sukses', 'Setoran berhasil dicatat!', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
+      if (isOnline()) {
+        await processPayment({
+          customerId: selectedCustomer.id,
+          customerName: selectedCustomer.name,
+          amount: numericAmount,
+          notes: notes,
+          collectorId: user.id,
+          collectorName: user.name
+        });
+        Alert.alert('Sukses', 'Setoran berhasil dicatat!', [
+          { text: 'OK', onPress: () => router.back() }
+        ]);
+      } else {
+        await enqueue({
+          type: 'payment',
+          priority: 'critical',
+          maxSize: 20000,
+          format: 'json',
+          data: {
+            customerId: selectedCustomer.id,
+            customerName: selectedCustomer.name,
+            amount: numericAmount,
+            notes: notes,
+            collectorId: user.id,
+            collectorName: user.name
+          },
+          metadata: { userId: user.id, sensitive: true }
+        });
+        Alert.alert('Offline', 'Tidak ada koneksi. Data setoran disimpan sementara dan akan disinkronkan otomatis.');
+        router.back();
+      }
     } catch (error: any) {
       Alert.alert('Gagal', error.message || 'Terjadi kesalahan saat menyimpan data.');
     } finally {

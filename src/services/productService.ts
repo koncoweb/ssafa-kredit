@@ -11,6 +11,7 @@ import {
   query, 
   where, 
   orderBy,
+  limit as qLimit,
   serverTimestamp,
   runTransaction,
   increment
@@ -38,6 +39,24 @@ export async function getProducts(activeOnly: boolean = true): Promise<Product[]
 
   const snapshot = await getDocs(q);
   return snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Product));
+}
+
+let featuredCache: { ts: number; data: Product[] } | null = null;
+export async function getFeaturedProducts(count: number = 8): Promise<Product[]> {
+  const now = Date.now();
+  if (featuredCache && (now - featuredCache.ts) < 60_000) {
+    return featuredCache.data;
+  }
+  const q = query(
+    collection(db, PRODUCTS_COLLECTION),
+    where('active', '==', true),
+    orderBy('name'),
+    qLimit(count)
+  );
+  const snapshot = await getDocs(q);
+  const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Product));
+  featuredCache = { ts: now, data };
+  return data;
 }
 
 export async function getProduct(id: string): Promise<Product | null> {
@@ -160,17 +179,34 @@ export async function getProductStockHistory(productId: string): Promise<StockHi
 export async function getCreditSettings(): Promise<CreditSettings> {
   const docRef = doc(db, SETTINGS_COLLECTION, CREDIT_SETTINGS_DOC);
   const snapshot = await getDoc(docRef);
-  if (snapshot.exists()) {
-    return snapshot.data() as CreditSettings;
-  }
-  // Default settings
-  return {
-    globalMarkupPercentage: 10, // Default 10%
+  const defaults: CreditSettings = {
+    globalMarkupPercentage: 10,
     defaultTenor: 12,
     availableTenors: {
       weekly: [4, 8, 12, 16],
-      monthly: [3, 6, 9, 12]
-    }
+      monthly: [3, 6, 9, 12],
+    },
+  };
+  if (!snapshot.exists()) {
+    return defaults;
+  }
+  const data: any = snapshot.data() || {};
+  const weekly =
+    Array.isArray(data?.availableTenors?.weekly) && data.availableTenors.weekly.length > 0
+      ? data.availableTenors.weekly
+      : defaults.availableTenors.weekly;
+  const monthly =
+    Array.isArray(data?.availableTenors?.monthly) && data.availableTenors.monthly.length > 0
+      ? data.availableTenors.monthly
+      : defaults.availableTenors.monthly;
+  const globalMarkup =
+    typeof data.globalMarkupPercentage === 'number' ? data.globalMarkupPercentage : defaults.globalMarkupPercentage;
+  const defaultTenor =
+    typeof data.defaultTenor === 'number' ? data.defaultTenor : defaults.defaultTenor;
+  return {
+    globalMarkupPercentage: globalMarkup,
+    defaultTenor,
+    availableTenors: { weekly, monthly },
   };
 }
 

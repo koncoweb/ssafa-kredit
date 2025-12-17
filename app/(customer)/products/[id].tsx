@@ -56,6 +56,12 @@ export default function ProductDetailScreen() {
   }
 
   const creditPrice = calculateCreditPrice(product.priceCash, product.markupPercentage, settings.globalMarkupPercentage);
+  const weeklyTenors = (settings.availableTenors?.weekly && settings.availableTenors.weekly.length > 0)
+    ? settings.availableTenors.weekly
+    : [4, 8, 12, 16];
+  const monthlyTenors = (settings.availableTenors?.monthly && settings.availableTenors.monthly.length > 0)
+    ? settings.availableTenors.monthly
+    : [3, 6, 9, 12];
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
@@ -101,7 +107,7 @@ export default function ProductDetailScreen() {
                     <DataTable.Title>Tenor</DataTable.Title>
                     <DataTable.Title numeric>Angsuran</DataTable.Title>
                 </DataTable.Header>
-                {settings.availableTenors.weekly.map((tenor) => {
+                {weeklyTenors.map((tenor) => {
                     const installment = calculateInstallment(creditPrice, 0, tenor);
                     return (
                         <DataTable.Row key={`w-${tenor}`}>
@@ -118,7 +124,7 @@ export default function ProductDetailScreen() {
                     <DataTable.Title>Tenor</DataTable.Title>
                     <DataTable.Title numeric>Angsuran</DataTable.Title>
                 </DataTable.Header>
-                {settings.availableTenors.monthly.map((tenor) => {
+                {monthlyTenors.map((tenor) => {
                     const installment = calculateInstallment(creditPrice, 0, tenor);
                     return (
                         <DataTable.Row key={`m-${tenor}`}>

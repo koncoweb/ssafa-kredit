@@ -4,6 +4,8 @@ import { Appbar, Text, Button, Portal, Dialog, Card } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuthStore } from '../../src/store/authStore';
 import { useRouter } from 'expo-router';
+import { HomeHeader } from '../../src/components/home/HomeHeader';
+import { ShortcutGrid } from '../../src/components/home/ShortcutGrid';
 
 export default function EmployeeDashboard() {
   const { user, logout } = useAuthStore();
@@ -21,11 +23,7 @@ export default function EmployeeDashboard() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F2F2F2' }}>
-      <Appbar.Header style={{ backgroundColor: '#fff', elevation: 2 }}>
-        <Appbar.Content title="Area Karyawan" />
-        <Appbar.Action icon="apps" onPress={() => setQuickOpen(true)} />
-        <Appbar.Action icon="logout" onPress={() => { logout(); router.replace('/(auth)/login'); }} />
-      </Appbar.Header>
+      <HomeHeader title="Area Karyawan" />
       <View style={{ padding: 20 }}>
         <Text variant="headlineSmall" style={{ color: '#333' }}>Halo, {user?.name}</Text>
         <Text style={{ color: '#666' }}>Target hari ini: Rp 2.000.000</Text>
@@ -45,22 +43,12 @@ export default function EmployeeDashboard() {
         >
           Transaksi Baru
         </Button>
-        <Button 
-          mode="contained" 
-          style={{ marginTop: 10, backgroundColor: '#1976D2' }} 
-          icon="account-plus"
-          onPress={() => router.push('/(employee)/customers')}
-        >
-          Tambah Nasabah
-        </Button>
-        <Button 
-          mode="outlined" 
-          style={{ marginTop: 10 }} 
-          icon="shopping"
-          onPress={() => router.push('/(employee)/catalog')}
-        >
-          Katalog Produk
-        </Button>
+        <ShortcutGrid items={[
+          { label: 'Setoran', icon: 'cash-plus', route: '/(employee)/payments/create' },
+          { label: 'Transaksi', icon: 'cart-plus', route: '/(employee)/transactions/create' },
+          { label: 'Nasabah', icon: 'account-plus', route: '/(employee)/customers' },
+          { label: 'Katalog', icon: 'shopping', route: '/(employee)/catalog' },
+        ]} />
       </View>
       <Portal>
         <Dialog visible={quickOpen} onDismiss={() => setQuickOpen(false)}>

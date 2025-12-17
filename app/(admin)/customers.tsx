@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { getAllCustomers, createCustomerProfile, CustomerData, updateCustomerProfile } from '../../src/services/firestore';
 import { recalculateCustomerDebt, diagnoseCustomerDebt } from '../../src/services/transactionService';
 import { createSecondaryUser } from '../../src/services/authSdk';
+import { isOnline, enqueue } from '../../src/services/offline';
 
 export default function CustomersManagement() {
   const router = useRouter();
@@ -83,17 +84,36 @@ export default function CustomersManagement() {
     setLoadingAction(true);
     try {
       if (isEditMode && editingId) {
-        // Edit Mode
-        await updateCustomerProfile(editingId, {
-          name: newName,
-          email: newEmail, // Note: Changing email in Auth requires different flow, here we just update DB profile
-          phone: newPhone,
-          address: newAddress,
-          creditLimit: parseFloat(newLimit) || 0,
-        });
-        Alert.alert('Sukses', 'Data nasabah berhasil diperbarui');
+        if (isOnline()) {
+          await updateCustomerProfile(editingId, {
+            name: newName,
+            email: newEmail,
+            phone: newPhone,
+            address: newAddress,
+            creditLimit: parseFloat(newLimit) || 0,
+          });
+          Alert.alert('Sukses', 'Data nasabah berhasil diperbarui');
+        } else {
+          await enqueue({
+            type: 'updateCustomerProfile',
+            priority: 'high',
+            maxSize: 30000,
+            format: 'json',
+            data: {
+              uid: editingId,
+              update: {
+                name: newName,
+                email: newEmail,
+                phone: newPhone,
+                address: newAddress,
+                creditLimit: parseFloat(newLimit) || 0,
+              }
+            },
+            metadata: { userId: currentUser?.id || 'unknown' }
+          });
+          Alert.alert('Offline', 'Tidak ada koneksi. Perubahan disimpan sementara dan akan disinkronkan otomatis.');
+        }
       } else {
-        // Add Mode
         const user = await createSecondaryUser(newEmail, newPassword);
         await createCustomerProfile(user.uid, {
           uid: user.uid,

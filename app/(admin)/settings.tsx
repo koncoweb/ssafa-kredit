@@ -6,6 +6,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { getUserRole, setUserRole } from '../../src/services/firestore';
 import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
 import { resetDatabase } from '../../src/services/adminService';
+import { syncAll, isOnline } from '../../src/services/offline';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -97,6 +98,19 @@ export default function SettingsPage() {
   const handleLogout = () => {
     logout();
     router.replace('/(auth)/login');
+  };
+
+  const handleManualSync = async () => {
+    try {
+      if (!isOnline()) {
+        Alert.alert('Offline', 'Tidak ada koneksi. Sinkronisasi akan berjalan otomatis saat online.');
+        return;
+      }
+      await syncAll();
+      Alert.alert('Sukses', 'Sinkronisasi offline telah dijalankan.');
+    } catch (e: any) {
+      Alert.alert('Gagal', e.message || 'Sinkronisasi gagal.');
+    }
   };
 
   const confirmResetDatabase = async () => {
@@ -216,6 +230,12 @@ export default function SettingsPage() {
             left={props => <List.Icon {...props} icon="delete-alert" color="red" />}
             onPress={() => setShowResetDialog(true)}
             right={props => resetting ? <ActivityIndicator {...props} /> : null}
+          />
+          <List.Item
+            title="Sinkronisasi Offline"
+            description="Kirim antrian offline ke server sekarang"
+            left={props => <List.Icon {...props} icon="sync" />}
+            onPress={handleManualSync}
           />
         </List.Section>
 
