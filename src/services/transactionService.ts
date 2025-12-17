@@ -12,9 +12,7 @@ import {
   getDocs,
   increment,
   setDoc,
-  getDoc,
-  QueryDocumentSnapshot,
-  DocumentData
+  getDoc
 } from 'firebase/firestore';
 import { CreditTransaction, Installment, Product, Customer } from '../types';
 import { PRODUCTS_COLLECTION, STOCK_HISTORY_COLLECTION } from './productService';
@@ -504,11 +502,11 @@ export async function analyzeSystemConsistency() {
         const txQuery = query(collection(db, TRANSACTIONS_COLLECTION));
         const txSnap = await getDocs(txQuery);
         
-        txSnap.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
-            const data = doc.data();
+        txSnap.forEach((docSnap: any) => {
+            const data = docSnap.data();
             if (data.type === 'payment') {
-                if (!data.customerName) issues.push(`Transaction ${doc.id} (Payment) missing customerName`);
-                if (!data.collectorName) issues.push(`Transaction ${doc.id} (Payment) missing collectorName`);
+                if (!data.customerName) issues.push(`Transaction ${docSnap.id} (Payment) missing customerName`);
+                if (!data.collectorName) issues.push(`Transaction ${docSnap.id} (Payment) missing collectorName`);
             }
         });
 
@@ -516,13 +514,13 @@ export async function analyzeSystemConsistency() {
         const stockQuery = query(collection(db, STOCK_HISTORY_COLLECTION));
         const stockSnap = await getDocs(stockQuery);
         
-        stockSnap.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
-            const data = doc.data();
+        stockSnap.forEach((docSnap: any) => {
+            const data = docSnap.data();
             if (data.type === 'transaction' && !data.referenceId) {
-                issues.push(`StockHistory ${doc.id} (Transaction) missing referenceId`);
+                issues.push(`StockHistory ${docSnap.id} (Transaction) missing referenceId`);
             }
             if (!data.updatedByName) {
-                 issues.push(`StockHistory ${doc.id} missing updatedByName`);
+                 issues.push(`StockHistory ${docSnap.id} missing updatedByName`);
             }
         });
         

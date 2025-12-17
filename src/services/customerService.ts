@@ -9,7 +9,6 @@ import {
   startAt,
   endAt
 } from 'firebase/firestore';
-import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { Customer } from '../types';
 
 const CUSTOMERS_COLLECTION = 'customers';
@@ -23,9 +22,9 @@ export async function getCustomers(limitCount = 20): Promise<Customer[]> {
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc: QueryDocumentSnapshot<DocumentData>) => ({
-      id: doc.id,
-      ...doc.data()
+    return snapshot.docs.map((docSnap: any) => ({
+      id: docSnap.id,
+      ...docSnap.data()
     } as Customer));
   } catch (error) {
     console.error("Error fetching customers:", error);
@@ -49,9 +48,9 @@ export async function searchCustomers(searchTerm: string): Promise<Customer[]> {
     );
     
     const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc: QueryDocumentSnapshot<DocumentData>) => ({
-      id: doc.id,
-      ...doc.data()
+    return snapshot.docs.map((docSnap: any) => ({
+      id: docSnap.id,
+      ...docSnap.data()
     } as Customer));
   } catch (error) {
     console.error("Error searching customers:", error);

@@ -369,3 +369,40 @@ export async function getAdminStats() {
     totalDebt
   };
 }
+
+export interface CreditRequestInput {
+  id: string;
+  customerId: string;
+  customerName?: string;
+  customerPhone?: string;
+  productId: string;
+  productName?: string;
+  productPriceCash?: number;
+  creditPriceTotal?: number;
+  tenorType: 'weekly' | 'monthly' | 'daily';
+  tenorCount: number;
+  downPayment: number;
+  notes?: string;
+}
+
+export async function createCreditRequest(input: CreditRequestInput) {
+  const ref = doc(db, 'credit_requests', input.id);
+  await setDoc(ref, {
+    id: input.id,
+    customerId: input.customerId,
+    customerName: input.customerName || '',
+    customerPhone: input.customerPhone || '',
+    productId: input.productId,
+    productName: input.productName || '',
+    productPriceCash: input.productPriceCash || 0,
+    creditPriceTotal: input.creditPriceTotal || 0,
+    tenorType: input.tenorType,
+    tenorCount: input.tenorCount,
+    downPayment: input.downPayment,
+    notes: input.notes || '',
+    status: 'pending',
+    source: 'customer',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
+}

@@ -1,11 +1,22 @@
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { processPayment } from './transactionService';
-import { updateCustomerProfile, getCustomerData } from './firestore';
+import { updateCustomerProfile, getCustomerData, createCreditRequest } from './firestore';
 
 type Priority = 'critical' | 'high' | 'medium' | 'low';
 type DataFormat = 'json' | 'blob' | 'text';
 type SyncStatus = 'queued' | 'synced' | 'failed' | 'conflict';
+
+export type OfflineLogEntry = {
+  id: string;
+  type: 'enqueue' | 'synced' | 'retry' | 'conflict' | 'failed' | 'update';
+  itemId?: string;
+  itemType?: string;
+  attempts?: number;
+  at: number;
+  code?: string;
+  message?: string;
+};
 
 export type OfflineItem = {
   id: string;
@@ -21,7 +32,15 @@ export type OfflineItem = {
     attempts?: number;
     nextTryAt?: number;
     sensitive?: boolean;
+    lastErrorCode?: string;
+    lastErrorMessage?: string;
+    lastErrorAt?: number;
   };
+};
+
+type OfflineItemMetadataInput = {
+  userId: string;
+  sensitive?: boolean;
 };
 
 type Listener = (event: string, payload?: any) => void;
@@ -29,6 +48,14 @@ type Listener = (event: string, payload?: any) => void;
 let listeners: Listener[] = [];
 let online = typeof navigator !== 'undefined' ? navigator.onLine : true;
 let idb: IDBDatabase | null = null;
+
+const OFFLINE_QUEUE_KEY = 'offline_queue';
+const OFFLINE_LOGS_KEY = 'offline_logs';
+const MAX_ATTEMPTS = 5;
+
+function nativePayloadKey(id: string) {
+  return `offline_payload_${id}`;
+}
 
 const PRIORITY_ORDER: Record<Priority, number> = {
   critical: 0,
@@ -93,8 +120,76 @@ async function encryptWeb(data: any, keySeed: string) {
   return btoa(String.fromCharCode(...out));
 }
 
+function base64ToBytes(b64: string) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+async function decryptWeb(payload: string, keySeed: string) {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(keySeed), { name: 'PBKDF2' }, false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode('ssafa-salt'), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+  const bytes = base64ToBytes(payload);
+  const iv = bytes.slice(0, 12);
+  const data = bytes.slice(12);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  const raw = dec.decode(new Uint8Array(plaintext));
+  return JSON.parse(raw);
+}
+
 function redactNative(data: any) {
   return { redacted: true };
+}
+
+async function getSecureStore() {
+  try {
+    const mod = await import('expo-secure-store');
+    return mod;
+  } catch {
+    return null;
+  }
+}
+
+async function setNativeSensitivePayload(id: string, data: any) {
+  const SecureStore = await getSecureStore();
+  if (!SecureStore?.setItemAsync) return false;
+  try {
+    await SecureStore.setItemAsync(nativePayloadKey(id), JSON.stringify(data));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getNativeSensitivePayload(id: string) {
+  const SecureStore = await getSecureStore();
+  if (!SecureStore?.getItemAsync) return null;
+  try {
+    const raw = await SecureStore.getItemAsync(nativePayloadKey(id));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function deleteNativeSensitivePayload(id: string) {
+  const SecureStore = await getSecureStore();
+  if (!SecureStore?.deleteItemAsync) return;
+  try {
+    await SecureStore.deleteItemAsync(nativePayloadKey(id));
+  } catch {}
 }
 
 async function storeWeb(item: OfflineItem) {
@@ -138,8 +233,19 @@ async function logWeb(entry: any) {
   });
 }
 
+async function getAllLogsWeb(): Promise<OfflineLogEntry[]> {
+  const db = await ensureIDB();
+  const tx = db.transaction('logs', 'readonly');
+  const store = tx.objectStore('logs');
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result as OfflineLogEntry[]);
+    req.onerror = () => reject(req.error);
+  });
+}
+
 async function getAllNative(): Promise<OfflineItem[]> {
-  const raw = await AsyncStorage.getItem('offline_queue');
+  const raw = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
   if (!raw) return [];
   try {
     return JSON.parse(raw) as OfflineItem[];
@@ -150,21 +256,44 @@ async function getAllNative(): Promise<OfflineItem[]> {
 
 async function storeNative(item: OfflineItem) {
   const items = await getAllNative();
-  items.push(item);
-  await AsyncStorage.setItem('offline_queue', JSON.stringify(items));
+  const idx = items.findIndex((i) => i.id === item.id);
+  const next = idx >= 0 ? items.map((i) => (i.id === item.id ? item : i)) : [...items, item];
+  await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(next));
 }
 
 async function removeNative(id: string) {
   const items = await getAllNative();
+  const item = items.find((i) => i.id === id);
+  if (item?.metadata?.sensitive) {
+    await deleteNativeSensitivePayload(id);
+  }
   const next = items.filter((i) => i.id !== id);
-  await AsyncStorage.setItem('offline_queue', JSON.stringify(next));
+  await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(next));
 }
 
 async function logNative(entry: any) {
-  const raw = await AsyncStorage.getItem('offline_logs');
+  const raw = await AsyncStorage.getItem(OFFLINE_LOGS_KEY);
   const arr = raw ? JSON.parse(raw) : [];
   arr.push({ id: generateId(), ...entry });
-  await AsyncStorage.setItem('offline_logs', JSON.stringify(arr));
+  await AsyncStorage.setItem(OFFLINE_LOGS_KEY, JSON.stringify(arr));
+}
+
+async function getAllLogsNative(): Promise<OfflineLogEntry[]> {
+  const raw = await AsyncStorage.getItem(OFFLINE_LOGS_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as OfflineLogEntry[];
+  } catch {
+    return [];
+  }
+}
+
+export async function getQueue(): Promise<OfflineItem[]> {
+  return Platform.OS === 'web' ? await getAllWeb() : await getAllNative();
+}
+
+export async function getLogs(): Promise<OfflineLogEntry[]> {
+  return Platform.OS === 'web' ? await getAllLogsWeb() : await getAllLogsNative();
 }
 
 export function isOnline() {
@@ -195,7 +324,10 @@ export async function registerServiceWorker() {
     const reg = await navigator.serviceWorker.register('/sw.js');
     if ('sync' in reg) {
       try {
-        await reg.sync.register('offline-sync');
+        const syncManager = (reg as any).sync;
+        if (syncManager?.register) {
+          await syncManager.register('offline-sync');
+        }
       } catch {}
     }
     navigator.serviceWorker.addEventListener('message', (e) => {
@@ -218,7 +350,12 @@ function triggerBackgroundSync() {
   navigator.serviceWorker.ready
     .then((reg) => {
       if ('sync' in reg) {
-        return reg.sync.register('offline-sync');
+        const syncManager = (reg as any).sync;
+        if (syncManager?.register) {
+          return syncManager.register('offline-sync');
+        }
+        syncAll();
+        return;
       } else {
         syncAll();
       }
@@ -226,8 +363,12 @@ function triggerBackgroundSync() {
     .catch(() => syncAll());
 }
 
-export async function enqueue(item: Omit<OfflineItem, 'id' | 'metadata'> & { metadata: Omit<OfflineItem['metadata'], 'syncStatus'> }) {
-  const id = generateId();
+export async function enqueue(item: Omit<OfflineItem, 'id' | 'metadata'> & { metadata: OfflineItemMetadataInput }) {
+  return await upsertQueuedItem({ ...item });
+}
+
+export async function upsertQueuedItem(item: Omit<OfflineItem, 'id' | 'metadata'> & { id?: string; metadata: OfflineItemMetadataInput }) {
+  const id = item.id || generateId();
   const payload: OfflineItem = {
     ...item,
     id,
@@ -236,12 +377,16 @@ export async function enqueue(item: Omit<OfflineItem, 'id' | 'metadata'> & { met
       timestamp: Date.now(),
       syncStatus: 'queued',
       attempts: 0,
+      nextTryAt: undefined,
+      lastErrorCode: undefined,
+      lastErrorMessage: undefined,
+      lastErrorAt: undefined,
     },
   };
   const size = JSON.stringify(payload.data).length;
   if (size > payload.maxSize) {
     emit('offline-save-failed', { id, reason: 'too_large' });
-    return;
+    return id;
   }
   if (Platform.OS === 'web') {
     const toStore = { ...payload };
@@ -250,45 +395,112 @@ export async function enqueue(item: Omit<OfflineItem, 'id' | 'metadata'> & { met
         toStore.data = await encryptWeb(payload.data, payload.metadata.userId);
       } catch {
         emit('offline-save-failed', { id, reason: 'encrypt_failed' });
-        return;
+        return id;
       }
     }
     await storeWeb(toStore);
-    await logWeb({ type: 'enqueue', id, at: Date.now() });
+    await logWeb({ type: item.id ? 'update' : 'enqueue', itemId: id, itemType: payload.type, at: Date.now() });
   } else {
     const toStore = { ...payload };
     if (payload.metadata.sensitive) {
-      toStore.data = redactNative(payload.data);
+      const ok = await setNativeSensitivePayload(id, payload.data);
+      if (ok) {
+        toStore.data = redactNative(payload.data);
+      }
     }
     await storeNative(toStore);
-    await logNative({ type: 'enqueue', id, at: Date.now() });
+    await logNative({ type: item.id ? 'update' : 'enqueue', itemId: id, itemType: payload.type, at: Date.now() });
   }
   emit('offline-saved', { id });
+  return id;
+}
+
+function normalizeError(e: any): { code?: string; message?: string } {
+  const code = typeof e?.code === 'string' ? e.code : undefined;
+  const message = typeof e?.message === 'string' ? e.message : undefined;
+  return { code, message };
+}
+
+function isConflict(code?: string) {
+  return code === 'permission-denied' || code === 'failed-precondition' || code === 'already-exists';
+}
+
+async function resolveItemData(item: OfflineItem) {
+  if (Platform.OS === 'web') {
+    if (item.metadata.sensitive && typeof item.data === 'string') {
+      try {
+        return await decryptWeb(item.data, item.metadata.userId);
+      } catch {
+        return item.data;
+      }
+    }
+    return item.data;
+  }
+  const redacted = item?.data && typeof item.data === 'object' && item.data.redacted === true;
+  if (item.metadata.sensitive && redacted) {
+    const data = await getNativeSensitivePayload(item.id);
+    if (data !== null) return data;
+  }
+  return item.data;
+}
+
+export async function resolveQueuedItemData(item: OfflineItem) {
+  return await resolveItemData(item);
 }
 
 async function handleSyncItem(item: OfflineItem) {
   try {
+    const data = await resolveItemData(item);
     if (item.type === 'payment') {
       await processPayment({
-        customerId: item.data.customerId,
-        customerName: item.data.customerName,
-        amount: item.data.amount,
-        notes: item.data.notes,
-        collectorId: item.data.collectorId,
-        collectorName: item.data.collectorName,
+        customerId: data.customerId,
+        customerName: data.customerName,
+        amount: data.amount,
+        notes: data.notes,
+        collectorId: data.collectorId,
+        collectorName: data.collectorName,
       });
     } else if (item.type === 'updateCustomerProfile') {
-      const current = await getCustomerData(item.data.uid);
+      const current = await getCustomerData(data.uid);
       const lastServerUpdate = (current?.updatedAt?.toDate?.() as Date) || new Date(0);
       const clientStamp = new Date(item.metadata.timestamp);
       if (lastServerUpdate.getTime() > clientStamp.getTime()) {
+        item.metadata.syncStatus = 'conflict';
+        item.metadata.lastErrorCode = 'conflict';
+        item.metadata.lastErrorMessage = 'server_data_newer';
+        item.metadata.lastErrorAt = Date.now();
+        if (Platform.OS === 'web') {
+          await storeWeb(item);
+          await logWeb({ type: 'conflict', itemId: item.id, itemType: item.type, at: Date.now(), code: 'conflict' });
+        } else {
+          await storeNative(item);
+          await logNative({ type: 'conflict', itemId: item.id, itemType: item.type, at: Date.now(), code: 'conflict' });
+        }
         emit('offline-conflict', { id: item.id });
-        return false;
+        return true;
       }
-      await updateCustomerProfile(item.data.uid, item.data.update);
+      await updateCustomerProfile(data.uid, data.update);
+    } else if (item.type === 'creditRequest') {
+      await createCreditRequest(data);
     }
     return true;
   } catch (e: any) {
+    const { code, message } = normalizeError(e);
+    item.metadata.lastErrorCode = code;
+    item.metadata.lastErrorMessage = message;
+    item.metadata.lastErrorAt = Date.now();
+    if (code && isConflict(code)) {
+      item.metadata.syncStatus = 'conflict';
+      if (Platform.OS === 'web') {
+        await storeWeb(item);
+        await logWeb({ type: 'conflict', itemId: item.id, itemType: item.type, at: Date.now(), code, message });
+      } else {
+        await storeNative(item);
+        await logNative({ type: 'conflict', itemId: item.id, itemType: item.type, at: Date.now(), code, message });
+      }
+      emit('offline-conflict', { id: item.id });
+      return true;
+    }
     return false;
   }
 }
@@ -307,27 +519,49 @@ export async function syncAll() {
   const items = Platform.OS === 'web' ? await getAllWeb() : await getAllNative();
   const sorted = sortByPriority(items);
   for (const item of sorted) {
+    const now = Date.now();
+    if (item.metadata.syncStatus === 'conflict' || item.metadata.syncStatus === 'failed') {
+      continue;
+    }
+    if (item.metadata.nextTryAt && item.metadata.nextTryAt > now) {
+      continue;
+    }
     const ok = await handleSyncItem(item);
     if (ok) {
       if (Platform.OS === 'web') {
         await removeWeb(item.id);
-        await logWeb({ type: 'synced', id: item.id, at: Date.now() });
+        await logWeb({ type: 'synced', itemId: item.id, itemType: item.type, at: Date.now() });
       } else {
         await removeNative(item.id);
-        await logNative({ type: 'synced', id: item.id, at: Date.now() });
+        await logNative({ type: 'synced', itemId: item.id, itemType: item.type, at: Date.now() });
       }
       emit('offline-synced', { id: item.id });
     } else {
       const attempts = (item.metadata.attempts || 0) + 1;
-      const delay = Math.min(60000, Math.pow(2, attempts) * 1000);
       item.metadata.attempts = attempts;
+
+      if (attempts >= MAX_ATTEMPTS) {
+        item.metadata.syncStatus = 'failed';
+        item.metadata.nextTryAt = undefined;
+        if (Platform.OS === 'web') {
+          await storeWeb(item);
+          await logWeb({ type: 'failed', itemId: item.id, itemType: item.type, attempts, at: Date.now(), code: item.metadata.lastErrorCode, message: item.metadata.lastErrorMessage });
+        } else {
+          await storeNative(item);
+          await logNative({ type: 'failed', itemId: item.id, itemType: item.type, attempts, at: Date.now(), code: item.metadata.lastErrorCode, message: item.metadata.lastErrorMessage });
+        }
+        emit('offline-failed', { id: item.id });
+        continue;
+      }
+
+      const delay = Math.min(60000, Math.pow(2, attempts) * 1000);
       item.metadata.nextTryAt = Date.now() + delay;
       if (Platform.OS === 'web') {
         await storeWeb(item);
-        await logWeb({ type: 'retry', id: item.id, attempts, at: Date.now() });
+        await logWeb({ type: 'retry', itemId: item.id, itemType: item.type, attempts, at: Date.now(), code: item.metadata.lastErrorCode, message: item.metadata.lastErrorMessage });
       } else {
         await storeNative(item);
-        await logNative({ type: 'retry', id: item.id, attempts, at: Date.now() });
+        await logNative({ type: 'retry', itemId: item.id, itemType: item.type, attempts, at: Date.now(), code: item.metadata.lastErrorCode, message: item.metadata.lastErrorMessage });
       }
       setTimeout(() => {
         syncAll();

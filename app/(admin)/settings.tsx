@@ -6,7 +6,7 @@ import { useAuthStore } from '../../src/store/authStore';
 import { getUserRole, setUserRole } from '../../src/services/firestore';
 import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
 import { resetDatabase } from '../../src/services/adminService';
-import { syncAll, isOnline } from '../../src/services/offline';
+import { getLogs, getQueue, isOnline, OfflineItem, OfflineLogEntry, syncAll } from '../../src/services/offline';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -31,10 +31,27 @@ export default function SettingsPage() {
   const [tempWeekly, setTempWeekly] = useState('');
   const [tempMonthly, setTempMonthly] = useState('');
 
+  const [offlineDialogVisible, setOfflineDialogVisible] = useState(false);
+  const [offlineQueue, setOfflineQueue] = useState<OfflineItem[]>([]);
+  const [offlineLogs, setOfflineLogs] = useState<OfflineLogEntry[]>([]);
+  const [loadingOffline, setLoadingOffline] = useState(false);
+
   useEffect(() => {
     checkRole();
     loadCreditSettings();
+    loadOfflineViewer();
   }, []);
+
+  const loadOfflineViewer = async () => {
+    setLoadingOffline(true);
+    try {
+      const [q, l] = await Promise.all([getQueue(), getLogs()]);
+      setOfflineQueue(q);
+      setOfflineLogs(l);
+    } finally {
+      setLoadingOffline(false);
+    }
+  };
 
   const checkRole = async () => {
     if (!user?.id) return;
@@ -112,6 +129,14 @@ export default function SettingsPage() {
       Alert.alert('Gagal', e.message || 'Sinkronisasi gagal.');
     }
   };
+
+  const offlineSummary = (() => {
+    const queued = offlineQueue.filter(i => i.metadata.syncStatus === 'queued').length;
+    const failed = offlineQueue.filter(i => i.metadata.syncStatus === 'failed').length;
+    const conflict = offlineQueue.filter(i => i.metadata.syncStatus === 'conflict').length;
+    const retrying = offlineQueue.filter(i => (i.metadata.attempts || 0) > 0 && i.metadata.syncStatus === 'queued').length;
+    return { queued, failed, conflict, retrying, total: offlineQueue.length };
+  })();
 
   const confirmResetDatabase = async () => {
     setResetting(true);
@@ -237,7 +262,96 @@ export default function SettingsPage() {
             left={props => <List.Icon {...props} icon="sync" />}
             onPress={handleManualSync}
           />
+          <List.Item
+            title="Viewer Log Offline"
+            description={`Total: ${offlineSummary.total} | Queued: ${offlineSummary.queued} | Retry: ${offlineSummary.retrying} | Konflik: ${offlineSummary.conflict} | Gagal: ${offlineSummary.failed}`}
+            left={props => <List.Icon {...props} icon="clipboard-list" />}
+            onPress={async () => {
+              setOfflineDialogVisible(true);
+              await loadOfflineViewer();
+            }}
+          />
         </List.Section>
+
+        <Portal>
+          <Dialog visible={offlineDialogVisible} onDismiss={() => setOfflineDialogVisible(false)}>
+            <Dialog.Title>Viewer Log Offline</Dialog.Title>
+            <Dialog.ScrollArea>
+              <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingVertical: 12 }}>
+                {loadingOffline ? (
+                  <ActivityIndicator />
+                ) : (
+                  <>
+                    <Text variant="bodySmall" style={{ color: '#757575', marginBottom: 12 }}>
+                      Total: {offlineSummary.total} | Queued: {offlineSummary.queued} | Retry: {offlineSummary.retrying} | Konflik: {offlineSummary.conflict} | Gagal: {offlineSummary.failed}
+                    </Text>
+
+                    <List.Section title="Antrian">
+                      {offlineQueue.length === 0 ? (
+                        <List.Item title="Tidak ada item dalam antrian" />
+                      ) : (
+                        offlineQueue
+                          .slice()
+                          .sort((a, b) => (a.metadata.timestamp || 0) - (b.metadata.timestamp || 0))
+                          .map((i) => (
+                            <List.Item
+                              key={i.id}
+                              title={i.type}
+                              description={`Status: ${i.metadata.syncStatus} | Retry: ${i.metadata.attempts || 0}`}
+                              left={(props) => <List.Icon {...props} icon="sync" />}
+                              right={() => (
+                                <Text style={{ alignSelf: 'center', color: '#757575' }}>
+                                  {new Date(i.metadata.timestamp).toLocaleString('id-ID')}
+                                </Text>
+                              )}
+                            />
+                          ))
+                      )}
+                    </List.Section>
+
+                    <Divider />
+
+                    <List.Section title="Log">
+                      {offlineLogs.length === 0 ? (
+                        <List.Item title="Belum ada log" />
+                      ) : (
+                        offlineLogs
+                          .slice(-50)
+                          .reverse()
+                          .map((l) => (
+                            <List.Item
+                              key={l.id}
+                              title={`${l.type}${l.itemType ? ` • ${l.itemType}` : ''}`}
+                              description={
+                                `${l.itemId || '-'}${typeof l.at === 'number' ? ` • ${new Date(l.at).toLocaleString('id-ID')}` : ''}${l.attempts != null ? ` • Retry ${l.attempts}` : ''}${l.code ? ` • ${l.code}` : ''}`
+                              }
+                              left={(props) => <List.Icon {...props} icon="history" />}
+                            />
+                          ))
+                      )}
+                    </List.Section>
+                  </>
+                )}
+              </ScrollView>
+            </Dialog.ScrollArea>
+            <Dialog.Actions>
+              <Button
+                onPress={async () => {
+                  if (!isOnline()) {
+                    Alert.alert('Offline', 'Tidak ada koneksi.');
+                    return;
+                  }
+                  await syncAll();
+                  await loadOfflineViewer();
+                }}
+              >
+                Sinkronkan
+              </Button>
+              <Button onPress={loadOfflineViewer}>Refresh</Button>
+              <Button onPress={() => setOfflineDialogVisible(false)}>Tutup</Button>
+            </Dialog.Actions>
+          </Dialog>
+        </Portal>
 
         <View style={{ padding: 16 }}>
           <Button mode="outlined" icon="logout" onPress={handleLogout} textColor="red" style={{ borderColor: 'red' }}>

@@ -7,9 +7,11 @@ import { getAllCustomers, createCustomerProfile, CustomerData, updateCustomerPro
 import { recalculateCustomerDebt, diagnoseCustomerDebt } from '../../src/services/transactionService';
 import { createSecondaryUser } from '../../src/services/authSdk';
 import { isOnline, enqueue } from '../../src/services/offline';
+import { useAuthStore } from '../../src/store/authStore';
 
 export default function CustomersManagement() {
   const router = useRouter();
+  const { user } = useAuthStore();
   const [customers, setCustomers] = useState<CustomerData[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('new'); // 'new' | 'old'
@@ -109,7 +111,7 @@ export default function CustomersManagement() {
                 creditLimit: parseFloat(newLimit) || 0,
               }
             },
-            metadata: { userId: currentUser?.id || 'unknown' }
+            metadata: { userId: user?.id || 'unknown' }
           });
           Alert.alert('Offline', 'Tidak ada koneksi. Perubahan disimpan sementara dan akan disinkronkan otomatis.');
         }

@@ -7,7 +7,6 @@ import {
   setDoc,
   serverTimestamp
 } from 'firebase/firestore';
-import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 
 export async function resetDatabase() {
   try {
@@ -46,8 +45,8 @@ async function deleteCollection(collectionName: string) {
   let batch = writeBatch(db);
   let count = 0;
 
-  snapshot.docs.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
-    batch.delete(doc.ref);
+  snapshot.docs.forEach((docSnap: any) => {
+    batch.delete(docSnap.ref);
     count++;
 
     if (count === 500) {
@@ -74,8 +73,8 @@ async function resetCustomersDebt() {
   let batch = writeBatch(db);
   let count = 0;
 
-  snapshot.docs.forEach((docSnapshot: QueryDocumentSnapshot<DocumentData>) => {
-    batch.update(docSnapshot.ref, { 
+  snapshot.docs.forEach((docSnap: any) => {
+    batch.update(docSnap.ref, { 
       totalDebt: 0,
       currentDebt: 0,
       updatedAt: serverTimestamp()

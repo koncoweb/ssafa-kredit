@@ -106,6 +106,15 @@ service cloud.firestore {
       allow write: if isSignedIn() && isAdmin();
     }
 
+    match /credit_requests/{requestId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || isEmployee() || (isCustomer() && resource.data.customerId == request.auth.uid)
+      );
+      allow create: if isSignedIn() && isCustomer() && request.resource.data.customerId == request.auth.uid;
+      allow update: if isSignedIn() && (isAdmin() || isEmployee());
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
     // --- Global Stats (Total Piutang, Statistik Dashboard) ---
     // Koleksi ini menyimpan 'totalReceivables' dan data ringkasan lainnya secara real-time.
     // WAJIB bisa dibaca/tulis oleh Admin dan Employee.

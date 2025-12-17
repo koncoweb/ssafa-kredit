@@ -1,16 +1,32 @@
 import React, { useEffect, useState } from 'react';
-import { View, ScrollView, Image, StyleSheet } from 'react-native';
-import { Appbar, Text, Button, ActivityIndicator, Divider, List, Chip, Surface, DataTable } from 'react-native-paper';
+import { View, ScrollView, Image, StyleSheet, Alert } from 'react-native';
+import { Appbar, Text, Button, ActivityIndicator, Divider, Chip, Surface, DataTable, Portal, Dialog, TextInput, SegmentedButtons, List } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Product, CreditSettings } from '../../../src/types';
 import { getProduct, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../../src/services/productService';
+import { useAuthStore } from '../../../src/store/authStore';
+import { createCreditRequest, getCustomerData } from '../../../src/services/firestore';
+import { getQueue, isOnline, resolveQueuedItemData, syncAll, upsertQueuedItem } from '../../../src/services/offline';
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
+  const { user } = useAuthStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [settings, setSettings] = useState<CreditSettings | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [applyVisible, setApplyVisible] = useState(false);
+  const [queueVisible, setQueueVisible] = useState(false);
+  const [loadingQueue, setLoadingQueue] = useState(false);
+  const [queuedItems, setQueuedItems] = useState<any[]>([]);
+
+  const [draftQueueId, setDraftQueueId] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string>('');
+  const [tenorType, setTenorType] = useState<'weekly' | 'monthly'>('weekly');
+  const [tenorCount, setTenorCount] = useState<number | null>(null);
+  const [downPayment, setDownPayment] = useState<string>('0');
+  const [notes, setNotes] = useState<string>('');
 
   useEffect(() => {
     loadData();
@@ -34,6 +50,10 @@ export default function ProductDetailScreen() {
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
+  };
+
+  const generateClientId = () => {
+    return `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   };
 
   if (loading) {
@@ -62,6 +82,139 @@ export default function ProductDetailScreen() {
   const monthlyTenors = (settings.availableTenors?.monthly && settings.availableTenors.monthly.length > 0)
     ? settings.availableTenors.monthly
     : [3, 6, 9, 12];
+
+  const activeTenors = tenorType === 'weekly' ? weeklyTenors : monthlyTenors;
+  const dpNumber = (() => {
+    const n = parseInt(downPayment || '0');
+    return Number.isFinite(n) ? n : 0;
+  })();
+  const installment = tenorCount ? calculateInstallment(creditPrice, dpNumber, tenorCount) : null;
+
+  const loadQueueForUser = async () => {
+    if (!user?.id) return;
+    setLoadingQueue(true);
+    try {
+      const all = await getQueue();
+      const mine = all.filter((i) => i?.metadata?.userId === user.id && i?.metadata?.syncStatus !== 'synced');
+      setQueuedItems(mine);
+      return mine;
+    } finally {
+      setLoadingQueue(false);
+    }
+  };
+
+  const openApply = async () => {
+    if (!user?.id) {
+      Alert.alert('Login diperlukan', 'Silakan login untuk mengajukan kredit.');
+      return;
+    }
+    if (!product) return;
+
+    setApplyVisible(true);
+    const all = await loadQueueForUser();
+    const drafts = (all || []).filter((i) => i.type === 'creditRequest');
+    let existing: { item: any; data: any } | null = null;
+    for (const item of drafts) {
+      try {
+        const data = await resolveQueuedItemData(item);
+        if (data?.productId === product.id) {
+          existing = { item, data };
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (existing) {
+      setDraftQueueId(existing.item.id);
+      setRequestId(existing.data?.id || existing.data?.requestId || generateClientId());
+      setTenorType((existing.data?.tenorType as any) === 'monthly' ? 'monthly' : 'weekly');
+      setTenorCount(typeof existing.data?.tenorCount === 'number' ? existing.data.tenorCount : null);
+      setDownPayment(String(existing.data?.downPayment ?? '0'));
+      setNotes(String(existing.data?.notes ?? ''));
+    } else {
+      setDraftQueueId(null);
+      setRequestId(generateClientId());
+      setTenorType('weekly');
+      setTenorCount(null);
+      setDownPayment('0');
+      setNotes('');
+    }
+  };
+
+  const submitCreditRequest = async () => {
+    if (!user?.id || !product) return;
+    if (!tenorCount) {
+      Alert.alert('Validasi', 'Pilih tenor cicilan.');
+      return;
+    }
+    if (dpNumber < 0) {
+      Alert.alert('Validasi', 'DP tidak boleh negatif.');
+      return;
+    }
+    if (dpNumber >= creditPrice) {
+      Alert.alert('Validasi', 'DP terlalu besar.');
+      return;
+    }
+
+    if (isOnline()) {
+      try {
+        const customer = await getCustomerData(user.id);
+        await createCreditRequest({
+          id: requestId,
+          customerId: user.id,
+          customerName: customer?.name || user.name,
+          customerPhone: customer?.phone || '',
+          productId: product.id,
+          productName: product.name,
+          productPriceCash: product.priceCash,
+          creditPriceTotal: creditPrice,
+          tenorType,
+          tenorCount,
+          downPayment: dpNumber,
+          notes,
+        });
+        setApplyVisible(false);
+        Alert.alert('Sukses', 'Pengajuan kredit terkirim.');
+      } catch (e: any) {
+        Alert.alert('Gagal', e?.message || 'Gagal mengirim pengajuan kredit.');
+      }
+      return;
+    }
+
+    try {
+      const customer = await getCustomerData(user.id);
+      await upsertQueuedItem({
+        id: draftQueueId || undefined,
+        type: 'creditRequest',
+        priority: 'high',
+        maxSize: 1024 * 1024,
+        format: 'json',
+        data: {
+          id: requestId,
+          customerId: user.id,
+          customerName: customer?.name || user.name,
+          customerPhone: customer?.phone || '',
+          productId: product.id,
+          productName: product.name,
+          productPriceCash: product.priceCash,
+          creditPriceTotal: creditPrice,
+          tenorType,
+          tenorCount,
+          downPayment: dpNumber,
+          notes,
+        },
+        metadata: {
+          userId: user.id,
+          sensitive: true,
+        },
+      });
+      setApplyVisible(false);
+      Alert.alert('Tersimpan', 'Pengajuan disimpan sebagai draft (offline) dan akan disinkronkan otomatis.');
+    } catch (e: any) {
+      Alert.alert('Gagal', e?.message || 'Gagal menyimpan draft offline.');
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
@@ -137,9 +290,141 @@ export default function ProductDetailScreen() {
         </Surface>
       </ScrollView>
 
+      <Portal>
+        <Dialog visible={applyVisible} onDismiss={() => setApplyVisible(false)}>
+          <Dialog.Title>Ajukan Kredit</Dialog.Title>
+          <Dialog.ScrollArea>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingVertical: 12 }}>
+              <Text variant="titleMedium" style={{ marginBottom: 6 }}>{product.name}</Text>
+              <Text variant="bodySmall" style={{ color: '#757575', marginBottom: 16 }}>Harga kredit dasar: {formatCurrency(creditPrice)}</Text>
+
+              <SegmentedButtons
+                value={tenorType}
+                onValueChange={(v) => {
+                  setTenorType(v === 'monthly' ? 'monthly' : 'weekly');
+                  setTenorCount(null);
+                }}
+                buttons={[
+                  { value: 'weekly', label: 'Mingguan' },
+                  { value: 'monthly', label: 'Bulanan' },
+                ]}
+                style={{ marginBottom: 12 }}
+              />
+
+              <Text variant="labelLarge" style={{ marginBottom: 6 }}>Tenor</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 }}>
+                {activeTenors.map((t) => (
+                  <Chip
+                    key={`${tenorType}-${t}`}
+                    selected={tenorCount === t}
+                    onPress={() => setTenorCount(t)}
+                    style={{ marginRight: 8, marginBottom: 8 }}
+                    showSelectedOverlay
+                  >
+                    {t}x
+                  </Chip>
+                ))}
+              </View>
+
+              <TextInput
+                label="Uang Muka (DP)"
+                value={downPayment}
+                onChangeText={setDownPayment}
+                keyboardType="numeric"
+                mode="outlined"
+                style={{ marginBottom: 12, backgroundColor: '#fff' }}
+                left={<TextInput.Affix text="Rp" />}
+              />
+
+              {tenorCount && installment !== null ? (
+                <List.Item
+                  title="Estimasi angsuran"
+                  description={`${formatCurrency(installment)} / ${tenorType === 'weekly' ? 'minggu' : 'bulan'}`}
+                  left={(props) => <List.Icon {...props} icon="calculator" />}
+                />
+              ) : null}
+
+              <TextInput
+                label="Catatan (opsional)"
+                value={notes}
+                onChangeText={setNotes}
+                mode="outlined"
+                multiline
+                style={{ backgroundColor: '#fff' }}
+              />
+            </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button onPress={() => setApplyVisible(false)}>Batal</Button>
+            <Button onPress={submitCreditRequest}>Ajukan</Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        <Dialog
+          visible={queueVisible}
+          onDismiss={() => setQueueVisible(false)}
+        >
+          <Dialog.Title>Antrian Sinkronisasi</Dialog.Title>
+          <Dialog.ScrollArea>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingVertical: 12 }}>
+              {loadingQueue ? (
+                <ActivityIndicator />
+              ) : queuedItems.length === 0 ? (
+                <Text>Tidak ada item yang menunggu sinkronisasi.</Text>
+              ) : (
+                queuedItems
+                  .sort((a, b) => (a?.metadata?.timestamp || 0) - (b?.metadata?.timestamp || 0))
+                  .map((i) => (
+                    <List.Item
+                      key={i.id}
+                      title={i.type === 'creditRequest' ? 'Pengajuan Kredit' : i.type}
+                      description={`Status: ${i?.metadata?.syncStatus || 'queued'} | Retry: ${i?.metadata?.attempts || 0}`}
+                      left={(props) => <List.Icon {...props} icon="sync" />}
+                      right={() => (
+                        <Text style={{ alignSelf: 'center', color: '#757575' }}>
+                          {new Date(i?.metadata?.timestamp || Date.now()).toLocaleString('id-ID')}
+                        </Text>
+                      )}
+                    />
+                  ))
+              )}
+            </ScrollView>
+          </Dialog.ScrollArea>
+          <Dialog.Actions>
+            <Button
+              onPress={async () => {
+                if (!isOnline()) {
+                  Alert.alert('Offline', 'Tidak ada koneksi.');
+                  return;
+                }
+                await syncAll();
+                await loadQueueForUser();
+              }}
+            >
+              Sinkronkan
+            </Button>
+            <Button onPress={() => setQueueVisible(false)}>Tutup</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
+
       <View style={styles.footer}>
-        <Button mode="contained" onPress={() => {}} style={styles.button}>
-            Ajukan Kredit
+        <Button mode="contained" onPress={openApply} style={styles.button}>
+          Ajukan Kredit
+        </Button>
+        <Button
+          mode="text"
+          onPress={async () => {
+            if (!user?.id) {
+              Alert.alert('Login diperlukan', 'Silakan login untuk melihat antrian.');
+              return;
+            }
+            setQueueVisible(true);
+            await loadQueueForUser();
+          }}
+          style={{ marginTop: 4 }}
+        >
+          Lihat antrian sinkronisasi
         </Button>
       </View>
     </View>
