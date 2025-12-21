@@ -19,11 +19,16 @@ service cloud.firestore {
     function isAdmin() { return userRole() == 'admin'; }
     function isEmployee() { return userRole() == 'employee'; }
     function isCustomer() { return userRole() == 'customer'; }
+    
+    function isChangingProfitSharePercentage() {
+      return resource != null
+        && request.resource.data.diff(resource.data).changedKeys().hasAny(['profitSharePercentage']);
+    }
 
     // --- Users Collection (RBAC Roles) ---
     match /users/{uid} {
       allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin() || isEmployee());
-      allow write: if isSignedIn() && (
+      allow create: if isSignedIn() && (
         (
           isAdmin() &&
           !(uid == request.auth.uid && request.resource.data.role != 'admin')
@@ -31,15 +36,67 @@ service cloud.firestore {
         ||
         (
           request.auth.uid == uid &&
-          request.resource.data.role == resource.data.role
+          request.resource.data.role == 'customer'
         )
         ||
         (
           isEmployee() &&
-          resource == null &&
           request.resource.data.role == 'customer'
         )
       );
+      allow update: if isSignedIn() && (
+        (
+          isAdmin() &&
+          !(uid == request.auth.uid && request.resource.data.role != 'admin')
+        )
+        ||
+        (
+          request.auth.uid == uid &&
+          request.resource.data.role == resource.data.role &&
+          !isChangingProfitSharePercentage()
+        )
+      );
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
+    match /admin_logs/{logId} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /customer_access_logs/{logId} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (isAdmin() || isEmployee());
+      allow update, delete: if false;
+    }
+
+    match /print_logs/{logId} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && (isAdmin() || isEmployee());
+      allow update, delete: if false;
+    }
+
+    match /profit_share_percentage_audits/{auditId} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isAdmin();
+      allow update, delete: if false;
+    }
+
+    match /profit_shares/{profitShareId} {
+      allow read: if isSignedIn() && (
+        isAdmin() || (isEmployee() && resource.data.collectorId == request.auth.uid)
+      );
+      allow create: if isSignedIn() && (
+        isAdmin() || (isEmployee() && request.resource.data.collectorId == request.auth.uid)
+      );
+      allow update, delete: if isSignedIn() && isAdmin();
+    }
+
+    match /employee_withdrawals/{withdrawalId} {
+      allow read: if isSignedIn() && isAdmin();
+      allow create: if isSignedIn() && isAdmin();
+      allow update, delete: if false;
     }
 
     // --- Customers Data (Detail Nasabah) ---

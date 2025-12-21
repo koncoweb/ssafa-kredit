@@ -5,15 +5,18 @@ import {
   runTransaction, 
   serverTimestamp,
   Timestamp,
-  addDoc,
   query,
   where,
   orderBy,
+  limit,
+  startAfter,
   getDocs,
   increment,
   setDoc,
-  getDoc
+  getDoc,
+  onSnapshot
 } from 'firebase/firestore';
+import { Platform } from 'react-native';
 import { CreditTransaction, Installment, Product, Customer } from '../types';
 import { PRODUCTS_COLLECTION, STOCK_HISTORY_COLLECTION } from './productService';
 const CUSTOMERS_COLLECTION = 'customers';
@@ -21,6 +24,11 @@ export const STATS_COLLECTION = 'stats';
 export const STATS_FINANCIALS_DOC = 'financials';
 
 const TRANSACTIONS_COLLECTION = 'transactions';
+const PROFIT_SHARES_COLLECTION = 'profit_shares';
+
+function roundTo2Decimals(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 export interface CreateTransactionParams {
   customer: Customer;
@@ -176,7 +184,13 @@ export interface ProcessPaymentParams {
   notes?: string;
   collectorId: string;
   collectorName?: string;
+  paidAt?: Date;
+  paymentMethod?: PaymentMethod;
+  paymentProofImage?: string;
+  paymentReference?: string;
 }
+
+export type PaymentMethod = 'cash' | 'transfer';
 
 export interface PaymentTransaction {
   id: string;
@@ -187,19 +201,66 @@ export interface PaymentTransaction {
   status: 'completed';
   collectorId: string;
   collectorName?: string;
+  paymentMethod: PaymentMethod;
+  paymentProofImage?: string;
+  paymentReference?: string;
+  receiptNumber: string;
   createdAt: any;
   updatedAt: any;
   notes: string;
 }
 
-export async function processPayment(params: ProcessPaymentParams) {
+export type ProfitShareStatus = 'earned' | 'paid' | 'void';
+
+export interface ProfitShareRecord {
+  id: string;
+  paymentTransactionId: string;
+  customerId: string;
+  customerName?: string;
+  paymentAmount: number;
+  percentage: number;
+  profitShareAmount: number;
+  collectorId: string;
+  collectorName?: string;
+  status: ProfitShareStatus;
+  createdAt: any;
+  updatedAt: any;
+  monthKey: string;
+  notes?: string;
+}
+
+export interface ProcessPaymentResult {
+  transactionId: string;
+  receiptNumber: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  newDebt: number;
+  createdAt: Date;
+}
+
+function monthKeyFromDate(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export async function processPayment(params: ProcessPaymentParams): Promise<ProcessPaymentResult> {
   const { customerId, customerName, amount, notes, collectorId, collectorName } = params;
 
   try {
-    const paymentTxId = await runTransaction(db, async (transaction: any) => {
+    const result = await runTransaction(db, async (transaction: any) => {
       if (!amount || amount <= 0) {
         throw new Error("Jumlah pembayaran harus lebih dari 0");
       }
+
+      const collectorRef = doc(db, 'users', collectorId);
+      const collectorSnap = collectorId ? await transaction.get(collectorRef) : null;
+      const collectorRole = collectorSnap?.exists?.() ? collectorSnap.data().role : null;
+      const collectorPctRaw = collectorSnap?.exists?.() ? collectorSnap.data().profitSharePercentage : null;
+      const collectorPct = typeof collectorPctRaw === 'number' ? collectorPctRaw : 0;
+      const isEmployeeCollector = collectorRole === 'employee';
+      const safePct = collectorPct < 0 ? 0 : collectorPct > 100 ? 100 : collectorPct;
+      const profitShareAmount = isEmployeeCollector ? roundTo2Decimals((amount * safePct) / 100) : 0;
+
       const customerRef = doc(db, CUSTOMERS_COLLECTION, customerId);
       const customerDoc = await transaction.get(customerRef);
 
@@ -222,6 +283,10 @@ export async function processPayment(params: ProcessPaymentParams) {
 
       // 1. Create Transaction Record (Payment)
       const newTransactionRef = doc(collection(db, TRANSACTIONS_COLLECTION));
+      const receiptNumber = `PAY/${newTransactionRef.id.slice(0, 8).toUpperCase()}`;
+      const createdAtValue = params.paidAt ? Timestamp.fromDate(params.paidAt) : serverTimestamp();
+      const updatedAtValue = params.paidAt ? Timestamp.fromDate(params.paidAt) : serverTimestamp();
+      const paymentMethod: PaymentMethod = params.paymentMethod || 'cash';
       const paymentData: PaymentTransaction = {
         id: newTransactionRef.id,
         customerId,
@@ -231,28 +296,67 @@ export async function processPayment(params: ProcessPaymentParams) {
         status: 'completed',
         collectorId,
         collectorName: collectorName || 'Unknown',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        paymentMethod,
+        paymentProofImage: params.paymentProofImage || undefined,
+        paymentReference: params.paymentReference || undefined,
+        receiptNumber,
+        createdAt: createdAtValue,
+        updatedAt: updatedAtValue,
         notes: notes || ''
       };
       transaction.set(newTransactionRef, paymentData);
+
+      if (isEmployeeCollector) {
+        const monthKey = monthKeyFromDate(params.paidAt || new Date());
+        const profitShareRef = doc(db, PROFIT_SHARES_COLLECTION, newTransactionRef.id);
+        const profitShareData: ProfitShareRecord = {
+          id: profitShareRef.id,
+          paymentTransactionId: newTransactionRef.id,
+          customerId,
+          customerName: actualCustomerName,
+          paymentAmount: amount,
+          percentage: roundTo2Decimals(safePct),
+          profitShareAmount,
+          collectorId,
+          collectorName: collectorName || 'Unknown',
+          status: 'earned',
+          createdAt: createdAtValue,
+          updatedAt: updatedAtValue,
+          monthKey,
+          notes: notes || ''
+        };
+        transaction.set(profitShareRef, profitShareData);
+        transaction.set(collectorRef, {
+          collected: increment(amount),
+          bonus: increment(profitShareAmount),
+          updatedAt: updatedAtValue
+        }, { merge: true });
+      }
 
       // 2. Update Customer Debt
       const newDebt = currentDebt - amount;
       transaction.update(customerRef, {
         totalDebt: newDebt,
         currentDebt: newDebt, // Keep currentDebt in sync
-        updatedAt: serverTimestamp()
+        updatedAt: updatedAtValue
       });
 
       // 3. Update Global Receivables
       const statsRef = doc(db, STATS_COLLECTION, STATS_FINANCIALS_DOC);
       transaction.set(statsRef, {
         totalReceivables: increment(-amount),
-        updatedAt: serverTimestamp()
+        updatedAt: updatedAtValue
       }, { merge: true });
 
-      return newTransactionRef.id;
+      return {
+        transactionId: newTransactionRef.id,
+        receiptNumber,
+        customerId,
+        customerName: actualCustomerName,
+        amount,
+        newDebt,
+        createdAt: params.paidAt || new Date()
+      } satisfies ProcessPaymentResult;
     });
 
     // Link payment to installments (mark paid in oldest active credits)
@@ -280,7 +384,7 @@ export async function processPayment(params: ProcessPaymentParams) {
         if (installments[i].status === 'paid') continue;
         if (remaining >= (installments[i].amount || 0)) {
           installments[i].status = 'paid';
-          installments[i].paidAt = serverTimestamp();
+          installments[i].paidAt = params.paidAt ? Timestamp.fromDate(params.paidAt) : serverTimestamp();
           remaining -= (installments[i].amount || 0);
           changed = true;
         } else {
@@ -292,17 +396,217 @@ export async function processPayment(params: ProcessPaymentParams) {
         await setDoc(doc(db, TRANSACTIONS_COLLECTION, d.id), {
           installments,
           status: allPaid ? 'completed' : data.status,
-          updatedAt: serverTimestamp()
+          updatedAt: params.paidAt ? Timestamp.fromDate(params.paidAt) : serverTimestamp()
         }, { merge: true });
       }
       if (remaining <= 0) break;
     }
 
-    return paymentTxId;
+    return result;
   } catch (error) {
     console.error("Payment transaction failed: ", error);
     throw error;
   }
+}
+
+export type CustomerTransactionKind = 'all' | 'payment' | 'credit';
+
+function isCreditTransactionLike(tx: any): tx is CreditTransaction {
+  if (!tx || typeof tx !== 'object') return false;
+  if (tx.type === 'payment') return false;
+  return Array.isArray(tx.installments) || typeof tx.creditPriceTotal === 'number';
+}
+
+function isPaymentTransactionLike(tx: any): tx is PaymentTransaction {
+  if (!tx || typeof tx !== 'object') return false;
+  return tx.type === 'payment';
+}
+
+export async function fetchCustomerTransactionsPage(params: {
+  customerId: string;
+  kind: CustomerTransactionKind;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const pageSize = params.pageSize || 20;
+  const baseConstraints: any[] = [where('customerId', '==', params.customerId)];
+  if (params.startDate) baseConstraints.push(where('createdAt', '>=', params.startDate));
+  if (params.endDate) baseConstraints.push(where('createdAt', '<=', params.endDate));
+  baseConstraints.push(orderBy('createdAt', 'desc'));
+  if (params.cursor) baseConstraints.push(startAfter(params.cursor));
+  baseConstraints.push(limit(pageSize));
+
+  const typedConstraints: any[] =
+    params.kind === 'payment' ? [where('customerId', '==', params.customerId), where('type', '==', 'payment')] : [];
+  if (params.kind === 'payment') {
+    if (params.startDate) typedConstraints.push(where('createdAt', '>=', params.startDate));
+    if (params.endDate) typedConstraints.push(where('createdAt', '<=', params.endDate));
+    typedConstraints.push(orderBy('createdAt', 'desc'));
+    if (params.cursor) typedConstraints.push(startAfter(params.cursor));
+    typedConstraints.push(limit(pageSize));
+  }
+
+  let snapshot: any;
+  try {
+    const q =
+      params.kind === 'payment'
+        ? query(collection(db, TRANSACTIONS_COLLECTION), ...typedConstraints)
+        : query(collection(db, TRANSACTIONS_COLLECTION), ...baseConstraints);
+    snapshot = await getDocs(q);
+  } catch {
+    const q = query(collection(db, TRANSACTIONS_COLLECTION), ...baseConstraints);
+    snapshot = await getDocs(q);
+  }
+
+  const raw = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as any[];
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+
+  let items = raw;
+  if (params.kind === 'payment') items = items.filter(isPaymentTransactionLike);
+  if (params.kind === 'credit') items = items.filter(isCreditTransactionLike);
+  if (params.kind === 'all') items = items.filter((t) => isPaymentTransactionLike(t) || isCreditTransactionLike(t));
+
+  return { items, nextCursor };
+}
+
+export async function getProfitSharesReport(filters: {
+  collectorId?: string | null;
+  startDate?: Date;
+  endDate?: Date;
+  limitCount?: number;
+}) {
+  const limitCount = filters.limitCount || 1000;
+  const q = query(collection(db, PROFIT_SHARES_COLLECTION), orderBy('createdAt', 'desc'), limit(limitCount));
+
+  try {
+    const snapshot = await getDocs(q);
+    const data = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as ProfitShareRecord[];
+
+    const filtered = data.filter((r: any) => {
+      if (filters.collectorId && r.collectorId !== filters.collectorId) return false;
+      if (!filters.startDate && !filters.endDate) return true;
+      const dt = r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+      if (filters.startDate && dt < filters.startDate) return false;
+      if (filters.endDate && dt > filters.endDate) return false;
+      return true;
+    });
+
+    return filtered;
+  } catch (error) {
+    console.warn("Profit share report query error:", error);
+    return [];
+  }
+}
+
+export async function fetchProfitSharesPage(filters: {
+  collectorId?: string | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  status?: ProfitShareStatus | null;
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const pageSize = filters.pageSize || 20;
+  const constraints: any[] = [];
+  if (filters.collectorId) constraints.push(where('collectorId', '==', filters.collectorId));
+  if (filters.status) constraints.push(where('status', '==', filters.status));
+  if (filters.startDate) constraints.push(where('createdAt', '>=', filters.startDate));
+  if (filters.endDate) constraints.push(where('createdAt', '<=', filters.endDate));
+  constraints.push(orderBy('createdAt', 'desc'));
+  if (filters.cursor) constraints.push(startAfter(filters.cursor));
+  constraints.push(limit(pageSize));
+
+  const q = query(collection(db, PROFIT_SHARES_COLLECTION), ...constraints);
+  const snapshot = await getDocs(q);
+  const items = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as ProfitShareRecord[];
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+  return { items, nextCursor };
+}
+
+export async function fetchPaymentTransactionsPage(filters: {
+  collectorId?: string | null;
+  customerId?: string | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  paymentMethod?: PaymentMethod | null;
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const pageSize = filters.pageSize || 20;
+
+  const sharedConstraints: any[] = [];
+  if (filters.collectorId) sharedConstraints.push(where('collectorId', '==', filters.collectorId));
+  if (filters.customerId) sharedConstraints.push(where('customerId', '==', filters.customerId));
+  if (filters.paymentMethod) sharedConstraints.push(where('paymentMethod', '==', filters.paymentMethod));
+  if (filters.startDate) sharedConstraints.push(where('createdAt', '>=', filters.startDate));
+  if (filters.endDate) sharedConstraints.push(where('createdAt', '<=', filters.endDate));
+  sharedConstraints.push(orderBy('createdAt', 'desc'));
+  if (filters.cursor) sharedConstraints.push(startAfter(filters.cursor));
+  sharedConstraints.push(limit(pageSize));
+
+  const typedConstraints: any[] = [where('type', '==', 'payment'), ...sharedConstraints];
+
+  let snapshot: any;
+  try {
+    snapshot = await getDocs(query(collection(db, TRANSACTIONS_COLLECTION), ...typedConstraints));
+  } catch {
+    snapshot = await getDocs(query(collection(db, TRANSACTIONS_COLLECTION), ...sharedConstraints));
+  }
+
+  const raw = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as any[];
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+  const items = raw.filter(isPaymentTransactionLike) as PaymentTransaction[];
+  return { items, nextCursor };
+}
+
+export function subscribeProfitSharesForEmployee(params: {
+  collectorId: string;
+  limitCount?: number;
+  onChange: (items: ProfitShareRecord[]) => void;
+  onError?: (e: any) => void;
+}) {
+  const limitCount = params.limitCount || 100;
+  const q = query(
+    collection(db, PROFIT_SHARES_COLLECTION),
+    where('collectorId', '==', params.collectorId),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  );
+
+  if (Platform.OS === 'web') {
+    let active = true;
+    const run = async () => {
+      try {
+        const snap = await getDocs(q);
+        if (!active) return;
+        const items = snap.docs.map((d: any) => ({ id: d.id, ...d.data() })) as ProfitShareRecord[];
+        params.onChange(items);
+      } catch (e: any) {
+        if (!active) return;
+        if (params.onError) params.onError(e);
+      }
+    };
+
+    run();
+    const intervalId = setInterval(run, 20000);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }
+
+  return onSnapshot(
+    q,
+    (snap: any) => {
+      const items = snap.docs.map((d: any) => ({ id: d.id, ...d.data() })) as ProfitShareRecord[];
+      params.onChange(items);
+    },
+    (e: any) => {
+      if (params.onError) params.onError(e);
+    }
+  );
 }
 
 export async function getReceivablesMutationReport(filters: {

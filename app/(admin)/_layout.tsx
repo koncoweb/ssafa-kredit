@@ -35,15 +35,6 @@ export default function AdminLayout() {
           ),
         }}
       />
-       <Tabs.Screen
-        name="map"
-        options={{
-          title: 'Lokasi',
-          tabBarIcon: ({ color }) => (
-            <MaterialCommunityIcons name="map-marker" size={24} color={color} />
-          ),
-        }}
-      />
       <Tabs.Screen
         name="settings"
         options={{

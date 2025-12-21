@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { Text, TextInput, Button, Card, Avatar, ActivityIndicator, HelperText, useTheme } from 'react-native-paper';
+import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, Image } from 'react-native';
+import { Text, TextInput, Button, Card, Avatar, ActivityIndicator, HelperText, useTheme, SegmentedButtons } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { processPayment } from '../../../src/services/transactionService';
 import { searchCustomers, getCustomers } from '../../../src/services/customerService';
 import { Customer } from '../../../src/types';
 import { isOnline, enqueue } from '../../../src/services/offline';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
+import { generatePaymentReceiptPDF } from '../../../src/services/printService';
 
 export default function CreatePaymentScreen() {
   const theme = useTheme();
@@ -19,6 +22,11 @@ export default function CreatePaymentScreen() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
+  const [paymentDate, setPaymentDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer'>('cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentProofImage, setPaymentProofImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
 
@@ -72,6 +80,23 @@ export default function CreatePaymentScreen() {
       return;
     }
 
+    if (numericAmount > (selectedCustomer.totalDebt || 0)) {
+      Alert.alert('Error', 'Nominal setoran melebihi total hutang nasabah.');
+      return;
+    }
+
+    const today = new Date();
+    const maxDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    if (paymentDate.getTime() > maxDate.getTime()) {
+      Alert.alert('Error', 'Tanggal setoran tidak boleh melebihi hari ini.');
+      return;
+    }
+
+    if (paymentMethod === 'transfer' && !paymentReference.trim() && !paymentProofImage) {
+      Alert.alert('Error', 'Untuk transfer, isi referensi atau upload bukti transaksi.');
+      return;
+    }
+
     if (!user) {
       Alert.alert('Error', 'Sesi anda telah berakhir. Silakan login ulang.');
       return;
@@ -80,14 +105,33 @@ export default function CreatePaymentScreen() {
     setLoading(true);
     try {
       if (isOnline()) {
-        await processPayment({
+        const result = await processPayment({
           customerId: selectedCustomer.id,
           customerName: selectedCustomer.name,
           amount: numericAmount,
           notes: notes,
           collectorId: user.id,
-          collectorName: user.name
+          collectorName: user.name,
+          paidAt: paymentDate,
+          paymentMethod,
+          paymentProofImage: paymentProofImage || undefined,
+          paymentReference: paymentReference.trim() || undefined,
         });
+        try {
+          await generatePaymentReceiptPDF({
+            receiptNumber: result.receiptNumber,
+            createdAt: result.createdAt,
+            customerName: result.customerName,
+            customerId: result.customerId,
+            amount: result.amount,
+            paymentMethod,
+            collectorName: user.name,
+            remainingDebt: result.newDebt,
+            notes: notes || ''
+          });
+        } catch (e: any) {
+          Alert.alert('Info', e?.message || 'Pembayaran tersimpan, namun bukti tidak bisa dibuat.');
+        }
         Alert.alert('Sukses', 'Setoran berhasil dicatat!', [
           { text: 'OK', onPress: () => router.back() }
         ]);
@@ -103,7 +147,11 @@ export default function CreatePaymentScreen() {
             amount: numericAmount,
             notes: notes,
             collectorId: user.id,
-            collectorName: user.name
+            collectorName: user.name,
+            paidAt: paymentDate.getTime(),
+            paymentMethod,
+            paymentProofImage: paymentProofImage || undefined,
+            paymentReference: paymentReference.trim() || undefined,
           },
           metadata: { userId: user.id, sensitive: true }
         });
@@ -117,10 +165,21 @@ export default function CreatePaymentScreen() {
     }
   };
 
-  const formatCurrency = (value: string) => {
-    const number = parseInt(value.replace(/[^0-9]/g, ''), 10);
-    if (isNaN(number)) return '';
-    return 'Rp ' + number.toLocaleString('id-ID');
+  const pickProofImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Izin Ditolak', 'Akses galeri dibutuhkan untuk upload bukti transaksi.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.6,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]?.base64) {
+      setPaymentProofImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    }
   };
 
   return (
@@ -216,6 +275,63 @@ export default function CreatePaymentScreen() {
                Masukkan nominal uang yang diterima.
              </HelperText>
 
+             <Button
+               mode="outlined"
+               onPress={() => setShowDatePicker(true)}
+               style={styles.input}
+               icon="calendar"
+               contentStyle={{ height: 48, justifyContent: 'flex-start' }}
+             >
+               {paymentDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+             </Button>
+
+             {showDatePicker && (
+               <DateTimePicker
+                 value={paymentDate}
+                 mode="date"
+                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                 maximumDate={new Date()}
+                 onChange={(_e, date) => {
+                   setShowDatePicker(false);
+                   if (date) setPaymentDate(date);
+                 }}
+               />
+             )}
+
+             <SegmentedButtons
+               value={paymentMethod}
+               onValueChange={(val) => setPaymentMethod(val as any)}
+               buttons={[
+                 { value: 'cash', label: 'Cash' },
+                 { value: 'transfer', label: 'Transfer' },
+               ]}
+               style={{ marginBottom: 10 }}
+             />
+
+             {paymentMethod === 'transfer' && (
+               <View style={{ marginBottom: 10 }}>
+                 <TextInput
+                   mode="outlined"
+                   label="Referensi Transfer (Opsional)"
+                   value={paymentReference}
+                   onChangeText={setPaymentReference}
+                   style={styles.input}
+                 />
+                 <TouchableOpacity onPress={pickProofImage} style={styles.proofBox}>
+                   {paymentProofImage ? (
+                     <Image source={{ uri: paymentProofImage }} style={styles.proofImage} />
+                   ) : (
+                     <Text style={{ color: '#666' }}>+ Upload Bukti Transfer</Text>
+                   )}
+                 </TouchableOpacity>
+                 {paymentProofImage ? (
+                   <Button mode="text" onPress={() => setPaymentProofImage(null)}>
+                     Hapus Bukti
+                   </Button>
+                 ) : null}
+               </View>
+             )}
+
              <TextInput
                 mode="outlined"
                 label="Catatan (Opsional)"
@@ -289,5 +405,21 @@ const styles = StyleSheet.create({
   },
   submitButton: {
     marginTop: 20,
-  }
+  },
+  proofBox: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    padding: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  proofImage: {
+    width: '100%',
+    height: 160,
+    borderRadius: 8,
+    resizeMode: 'contain',
+  },
 });

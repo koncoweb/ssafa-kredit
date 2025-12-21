@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, View, StyleSheet, Alert, RefreshControl, TouchableOpacity } from 'react-native';
-import { Appbar, Text, Card, List, Button, Menu, Divider, ActivityIndicator, Chip, Avatar, ProgressBar, Badge } from 'react-native-paper';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollView, View, StyleSheet, Alert, RefreshControl } from 'react-native';
+import { Appbar, Text, Card, Button, Menu, Divider, ActivityIndicator, Chip, ProgressBar, Badge } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 // import { GradientBackground } from '../../src/components/GradientBackground';
-import { getCreditTransactionsReport, getReceivablesMutationReport } from '../../src/services/transactionService';
-import { getAllCustomers, CustomerData } from '../../src/services/firestore';
+import { getCreditTransactionsReport, getReceivablesMutationReport, getProfitSharesReport, ProfitShareRecord } from '../../src/services/transactionService';
+import { getAllCustomers, CustomerData, getEmployees, EmployeeData } from '../../src/services/firestore';
 import { CreditTransaction } from '../../src/types';
 
 export default function ReportsScreen() {
@@ -17,17 +17,20 @@ export default function ReportsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
   const [mutations, setMutations] = useState<any[]>([]);
+  const [profitShares, setProfitShares] = useState<ProfitShareRecord[]>([]);
   const [customers, setCustomers] = useState<CustomerData[]>([]);
+  const [employees, setEmployees] = useState<EmployeeData[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
   
   // Filters
-  const [viewMode, setViewMode] = useState<'credits' | 'mutations'>('credits');
+  const [viewMode, setViewMode] = useState<'credits' | 'mutations' | 'profitShare'>('credits');
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('month');
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(customerIdParam || null);
   
   // UI State
   const [menuVisible, setMenuVisible] = useState(false);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       // 1. Calculate Date Range
@@ -60,7 +63,7 @@ export default function ReportsScreen() {
         ]);
         setTransactions(txData);
         setCustomers(custData);
-      } else {
+      } else if (viewMode === 'mutations') {
         const [mutData, custData] = await Promise.all([
             getReceivablesMutationReport({
                 customerId: selectedCustomer,
@@ -71,6 +74,13 @@ export default function ReportsScreen() {
         ]);
         setMutations(mutData);
         setCustomers(custData);
+      } else {
+        const [shareData, empData] = await Promise.all([
+          getProfitSharesReport({ startDate, endDate, limitCount: 2000 }),
+          getEmployees()
+        ]);
+        setProfitShares(shareData);
+        setEmployees(empData);
       }
     } catch (error) {
       console.error(error);
@@ -78,7 +88,7 @@ export default function ReportsScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [period, selectedCustomer, viewMode]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -88,7 +98,7 @@ export default function ReportsScreen() {
 
   useEffect(() => {
     loadData();
-  }, [period, selectedCustomer, viewMode]);
+  }, [loadData]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount || 0);
@@ -113,6 +123,47 @@ export default function ReportsScreen() {
     const cust = customers.find(c => c.uid === id);
     return cust ? cust.name : 'Unknown';
   };
+
+  const getEmployeeName = (id?: string) => {
+    if (!id) return 'Unknown';
+    const emp = employees.find(e => e.uid === id);
+    return emp ? (emp.name || emp.email || emp.uid) : 'Unknown';
+  };
+
+  const profitShareSummary = useMemo(() => {
+    return profitShares.reduce((acc, r) => {
+      acc.totalProfitShare += r.profitShareAmount || 0;
+      acc.totalPayment += r.paymentAmount || 0;
+      acc.count += 1;
+      return acc;
+    }, { totalProfitShare: 0, totalPayment: 0, count: 0 });
+  }, [profitShares]);
+
+  const profitShareGroups = useMemo(() => {
+    const map: Record<string, { collectorId: string; collectorName: string; count: number; totalPayment: number; totalProfitShare: number; avgPctSum: number; avgPctCount: number; }> = {};
+    profitShares.forEach((r) => {
+      const key = r.collectorId || 'unknown';
+      if (!map[key]) {
+        map[key] = {
+          collectorId: key,
+          collectorName: getEmployeeName(key),
+          count: 0,
+          totalPayment: 0,
+          totalProfitShare: 0,
+          avgPctSum: 0,
+          avgPctCount: 0
+        };
+      }
+      map[key].count += 1;
+      map[key].totalPayment += r.paymentAmount || 0;
+      map[key].totalProfitShare += r.profitShareAmount || 0;
+      if (typeof r.percentage === 'number') {
+        map[key].avgPctSum += r.percentage;
+        map[key].avgPctCount += 1;
+      }
+    });
+    return Object.values(map).sort((a, b) => b.totalProfitShare - a.totalProfitShare);
+  }, [profitShares, employees]);
 
   const getInstallmentProgress = (tx: CreditTransaction) => {
     const installments = tx.installments || [];
@@ -149,6 +200,13 @@ export default function ReportsScreen() {
         >
             Mutasi Piutang
         </Button>
+        <Button
+            mode={viewMode === 'profitShare' ? 'contained' : 'outlined'}
+            onPress={() => setViewMode('profitShare')}
+            style={{flex:1, marginLeft:5}}
+        >
+            Bagi Hasil
+        </Button>
       </View>
 
       <View style={styles.filterContainer}>
@@ -179,25 +237,47 @@ export default function ReportsScreen() {
           >Semua</Chip>
         </ScrollView>
 
-        <Menu
-          visible={menuVisible}
-          onDismiss={() => setMenuVisible(false)}
-          anchor={
-            <Button mode="outlined" onPress={() => setMenuVisible(true)} style={styles.filterBtn}>
-              {selectedCustomer ? getCustomerName(selectedCustomer) : 'Semua Nasabah'}
-            </Button>
-          }
-        >
-          <Menu.Item onPress={() => { setSelectedCustomer(null); setMenuVisible(false); }} title="Semua Nasabah" />
-          <Divider />
-          {customers.map(c => (
-            <Menu.Item 
-              key={c.uid} 
-              onPress={() => { setSelectedCustomer(c.uid); setMenuVisible(false); }} 
-              title={c.name} 
-            />
-          ))}
-        </Menu>
+        {viewMode !== 'profitShare' ? (
+          <Menu
+            visible={menuVisible}
+            onDismiss={() => setMenuVisible(false)}
+            anchor={
+              <Button mode="outlined" onPress={() => setMenuVisible(true)} style={styles.filterBtn}>
+                {selectedCustomer ? getCustomerName(selectedCustomer) : 'Semua Nasabah'}
+              </Button>
+            }
+          >
+            <Menu.Item onPress={() => { setSelectedCustomer(null); setMenuVisible(false); }} title="Semua Nasabah" />
+            <Divider />
+            {customers.map(c => (
+              <Menu.Item 
+                key={c.uid} 
+                onPress={() => { setSelectedCustomer(c.uid); setMenuVisible(false); }} 
+                title={c.name} 
+              />
+            ))}
+          </Menu>
+        ) : (
+          <Menu
+            visible={menuVisible}
+            onDismiss={() => setMenuVisible(false)}
+            anchor={
+              <Button mode="outlined" onPress={() => setMenuVisible(true)} style={styles.filterBtn}>
+                {selectedEmployee ? getEmployeeName(selectedEmployee) : 'Semua Karyawan'}
+              </Button>
+            }
+          >
+            <Menu.Item onPress={() => { setSelectedEmployee(null); setMenuVisible(false); }} title="Semua Karyawan" />
+            <Divider />
+            {employees.map(e => (
+              <Menu.Item
+                key={e.uid}
+                onPress={() => { setSelectedEmployee(e.uid); setMenuVisible(false); }}
+                title={e.name || e.email || e.uid}
+              />
+            ))}
+          </Menu>
+        )}
       </View>
 
       <ScrollView 
@@ -287,7 +367,7 @@ export default function ReportsScreen() {
                 );
                 })}
             </>
-        ) : (
+        ) : viewMode === 'mutations' ? (
             <>
                 <Text variant="titleMedium" style={styles.sectionTitle}>Riwayat Mutasi Piutang</Text>
                 
@@ -326,6 +406,63 @@ export default function ReportsScreen() {
                         </Card>
                     )
                  })}
+            </>
+        ) : (
+            <>
+              <View style={styles.summaryContainer}>
+                <Card style={[styles.card, { borderLeftColor: '#7B1FA2', borderLeftWidth: 4 }]}>
+                  <Card.Content>
+                    <Text variant="labelMedium">Total Bagi Hasil</Text>
+                    <Text variant="titleLarge" style={{ color: '#7B1FA2' }}>{formatCurrency(profitShareSummary.totalProfitShare)}</Text>
+                  </Card.Content>
+                </Card>
+                <Card style={[styles.card, { borderLeftColor: '#4CAF50', borderLeftWidth: 4 }]}>
+                  <Card.Content>
+                    <Text variant="labelMedium">Total Pembayaran</Text>
+                    <Text variant="titleLarge" style={{ color: '#4CAF50' }}>{formatCurrency(profitShareSummary.totalPayment)}</Text>
+                  </Card.Content>
+                </Card>
+              </View>
+
+              <Text variant="titleMedium" style={styles.sectionTitle}>Laporan Bagi Hasil</Text>
+
+              {loading && <ActivityIndicator animating={true} style={{ marginTop: 20 }} />}
+
+              {!loading && profitShares.length === 0 && (
+                <Text style={{ textAlign: 'center', marginTop: 20, color: '#666' }}>Belum ada data bagi hasil pada periode ini.</Text>
+              )}
+
+              {!loading && (
+                <>
+                  {profitShareGroups
+                    .filter((g) => !selectedEmployee || g.collectorId === selectedEmployee)
+                    .map((g) => {
+                      const avgPct = g.avgPctCount ? (g.avgPctSum / g.avgPctCount) : 0;
+                      return (
+                        <Card key={g.collectorId} style={styles.txCard}>
+                          <Card.Content>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <View style={{ flex: 1 }}>
+                                <Text variant="titleMedium" style={{ fontWeight: 'bold' }}>{g.collectorName}</Text>
+                                <Text variant="bodySmall" style={{ color: '#666' }}>
+                                  Transaksi: {g.count} • Rata-rata %: {Math.round(avgPct * 100) / 100}%
+                                </Text>
+                              </View>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Text variant="titleMedium" style={{ color: '#7B1FA2', fontWeight: 'bold' }}>
+                                  {formatCurrency(g.totalProfitShare)}
+                                </Text>
+                                <Text variant="bodySmall" style={{ color: '#666' }}>
+                                  Dari {formatCurrency(g.totalPayment)}
+                                </Text>
+                              </View>
+                            </View>
+                          </Card.Content>
+                        </Card>
+                      );
+                    })}
+                </>
+              )}
             </>
         )}
         

@@ -82,6 +82,13 @@ export default function AdminUsersManagement() {
                 <View style={{ flex: 1 }}>
                   <Text variant="titleMedium">{u.name || 'Tanpa Nama'}</Text>
                   <Text variant="bodySmall" style={{ color: '#666' }}>{u.email || u.uid}</Text>
+                  {u.role === 'employee' ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                      <Chip style={{ backgroundColor: '#F3E5F5', marginRight: 8 }} icon="percent">
+                        {typeof u.profitSharePercentage === 'number' ? u.profitSharePercentage : 0}%
+                      </Chip>
+                    </View>
+                  ) : null}
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <Menu

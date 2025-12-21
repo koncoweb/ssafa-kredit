@@ -319,9 +319,18 @@ export async function initOffline() {
 
 export async function registerServiceWorker() {
   if (Platform.OS !== 'web') return;
+  if (typeof __DEV__ === 'boolean' && __DEV__) return;
   if (!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('/sw.js');
+    const swUrl = '/sw.js';
+    const head = await fetch(swUrl, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+    if (head && !head.ok) return;
+    if (!head) {
+      const get = await fetch(swUrl, { method: 'GET', cache: 'no-store' }).catch(() => null);
+      if (get && !get.ok) return;
+      if (!get) return;
+    }
+    const reg = await navigator.serviceWorker.register(swUrl);
     if ('sync' in reg) {
       try {
         const syncManager = (reg as any).sync;
@@ -459,6 +468,10 @@ async function handleSyncItem(item: OfflineItem) {
         notes: data.notes,
         collectorId: data.collectorId,
         collectorName: data.collectorName,
+        paidAt: typeof data.paidAt === 'number' ? new Date(data.paidAt) : undefined,
+        paymentMethod: data.paymentMethod,
+        paymentProofImage: data.paymentProofImage,
+        paymentReference: data.paymentReference,
       });
     } else if (item.type === 'updateCustomerProfile') {
       const current = await getCustomerData(data.uid);

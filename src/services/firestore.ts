@@ -3,16 +3,18 @@ import {
   doc, 
   getDoc, 
   setDoc, 
-  addDoc, 
   collection, 
+  increment,
   serverTimestamp,
   query,
   where,
   getDocs,
   orderBy,
   limit,
+  startAfter,
+  startAt,
+  endAt,
   runTransaction,
-  increment,
   deleteField
 } from 'firebase/firestore';
 import { STATS_COLLECTION, STATS_FINANCIALS_DOC } from './transactionService';
@@ -31,6 +33,7 @@ export interface UserDoc {
   name?: string;
   email?: string;
   role: 'admin' | 'employee' | 'customer';
+  profitSharePercentage?: number;
   updatedAt?: any;
   createdAt?: any;
 }
@@ -45,10 +48,15 @@ export async function getAllUsers(): Promise<UserDoc[]> {
       name: data.name || '',
       email: data.email || '',
       role: (data.role || 'customer') as any,
+      profitSharePercentage: typeof data.profitSharePercentage === 'number' ? data.profitSharePercentage : undefined,
       createdAt: data.createdAt,
       updatedAt: data.updatedAt
     } as UserDoc;
   });
+}
+
+function roundTo2Decimals(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 export async function changeUserRole(targetUid: string, newRole: 'admin' | 'employee' | 'customer', actorId: string, actorName?: string) {
@@ -65,7 +73,8 @@ export async function changeUserRole(targetUid: string, newRole: 'admin' | 'empl
         collected: 0,
         bonus: 0,
         internalDebt: 0,
-        active: true
+        active: true,
+        profitSharePercentage: 0
       }, { merge: true });
     } else {
       transaction.update(userRef, {
@@ -73,7 +82,8 @@ export async function changeUserRole(targetUid: string, newRole: 'admin' | 'empl
         collected: deleteField(),
         bonus: deleteField(),
         internalDebt: deleteField(),
-        active: deleteField()
+        active: deleteField(),
+        profitSharePercentage: deleteField()
       });
     }
     
@@ -85,6 +95,43 @@ export async function changeUserRole(targetUid: string, newRole: 'admin' | 'empl
       actorName: actorName || 'Admin',
       oldRole,
       newRole,
+      createdAt: serverTimestamp()
+    });
+  });
+}
+
+export async function updateEmployeeProfitSharePercentage(
+  targetUid: string,
+  percentage: number,
+  actorId: string,
+  actorName?: string
+) {
+  const pct = roundTo2Decimals(percentage);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+    throw new Error('Presentase bagi hasil harus antara 0 sampai 100');
+  }
+
+  await runTransaction(db, async (transaction: any) => {
+    const userRef = doc(db, 'users', targetUid);
+    const userSnap = await transaction.get(userRef);
+    const role = userSnap.exists() ? userSnap.data().role : null;
+    if (role !== 'employee') {
+      throw new Error('Presentase bagi hasil hanya bisa diatur untuk karyawan');
+    }
+
+    const oldRaw = userSnap.data()?.profitSharePercentage;
+    const oldPct = typeof oldRaw === 'number' ? oldRaw : 0;
+
+    transaction.set(userRef, { profitSharePercentage: pct, updatedAt: serverTimestamp() }, { merge: true });
+
+    const auditRef = doc(collection(db, 'profit_share_percentage_audits'));
+    transaction.set(auditRef, {
+      id: auditRef.id,
+      userId: targetUid,
+      actorId,
+      actorName: actorName || 'Admin',
+      oldPercentage: oldPct,
+      newPercentage: pct,
       createdAt: serverTimestamp()
     });
   });
@@ -263,6 +310,118 @@ export async function getAllCustomers() {
   }) as CustomerData[];
 }
 
+export async function fetchCustomersPage(params: {
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const pageSize = params.pageSize || 20;
+  const constraints: any[] = [orderBy('name')];
+  if (params.cursor) constraints.push(startAfter(params.cursor));
+  constraints.push(limit(pageSize));
+
+  const q = query(collection(db, 'customers'), ...constraints);
+  const snapshot = await getDocs(q);
+  const items = snapshot.docs.map((d: any) => {
+    const data = d.data();
+    return {
+      uid: d.id,
+      ...data,
+      phone: data.phone || '',
+      address: data.address || '',
+      totalDebt: data.totalDebt || data.currentDebt || 0,
+      currentDebt: data.currentDebt || 0
+    } as CustomerData;
+  });
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+  return { items, nextCursor };
+}
+
+export async function searchCustomersPage(params: {
+  searchTerm: string;
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const searchTerm = params.searchTerm.trim();
+  if (!searchTerm) return { items: [] as CustomerData[], nextCursor: null };
+
+  const pageSize = params.pageSize || 20;
+  const constraints: any[] = [orderBy('name'), startAt(searchTerm), endAt(searchTerm + '\uf8ff')];
+  if (params.cursor) constraints.push(startAfter(params.cursor));
+  constraints.push(limit(pageSize));
+
+  const q = query(collection(db, 'customers'), ...constraints);
+  const snapshot = await getDocs(q);
+  const items = snapshot.docs.map((d: any) => {
+    const data = d.data();
+    return {
+      uid: d.id,
+      ...data,
+      phone: data.phone || '',
+      address: data.address || '',
+      totalDebt: data.totalDebt || data.currentDebt || 0,
+      currentDebt: data.currentDebt || 0
+    } as CustomerData;
+  });
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+  return { items, nextCursor };
+}
+
+export interface CustomerAccessLogInput {
+  actorId: string;
+  actorName?: string;
+  actorRole: 'admin' | 'employee';
+  customerId: string;
+  customerName?: string;
+  action: 'view_customer_detail' | 'view_customer_payments' | 'view_customer_credits';
+}
+
+export async function logCustomerAccess(input: CustomerAccessLogInput) {
+  const ref = doc(collection(db, 'customer_access_logs'));
+  await setDoc(ref, {
+    id: ref.id,
+    actorId: input.actorId,
+    actorName: input.actorName || '',
+    actorRole: input.actorRole,
+    customerId: input.customerId,
+    customerName: input.customerName || '',
+    action: input.action,
+    createdAt: serverTimestamp()
+  });
+}
+
+export type PrintAuditAction =
+  | 'print_payment_receipt'
+  | 'print_payments_history'
+  | 'print_withdrawal_receipt'
+  | 'print_withdrawals_history'
+  | 'print_profit_share_receipt'
+  | 'print_profit_shares_history';
+
+export interface PrintAuditLogInput {
+  actorId: string;
+  actorName?: string;
+  actorRole: 'admin' | 'employee';
+  action: PrintAuditAction;
+  targetId?: string;
+  targetName?: string;
+  meta?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export async function logPrintActivity(input: PrintAuditLogInput) {
+  const ref = doc(collection(db, 'print_logs'));
+  await setDoc(ref, {
+    id: ref.id,
+    actorId: input.actorId,
+    actorName: input.actorName || '',
+    actorRole: input.actorRole,
+    action: input.action,
+    targetId: input.targetId || '',
+    targetName: input.targetName || '',
+    meta: input.meta || {},
+    createdAt: serverTimestamp()
+  });
+}
+
 export interface EmployeeData {
   uid: string;
   name: string;
@@ -274,6 +433,116 @@ export interface EmployeeData {
   bonus: number;
   internalDebt: number;
   active: boolean;
+  profitSharePercentage?: number;
+}
+
+export type EmployeeWithdrawalStatus = 'completed' | 'void';
+
+export interface EmployeeWithdrawalRecord {
+  id: string;
+  employeeId: string;
+  employeeName?: string;
+  amount: number;
+  status: EmployeeWithdrawalStatus;
+  actorId: string;
+  actorName?: string;
+  notes?: string;
+  monthKey: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+const EMPLOYEE_WITHDRAWALS_COLLECTION = 'employee_withdrawals';
+
+function monthKeyFromDate(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export async function createEmployeeWithdrawal(params: {
+  employeeId: string;
+  amount: number;
+  actorId: string;
+  actorName?: string;
+  notes?: string;
+}) {
+  const amountRounded = roundTo2Decimals(params.amount);
+  if (!Number.isFinite(amountRounded) || amountRounded <= 0) {
+    throw new Error('Nominal penarikan harus lebih dari 0');
+  }
+
+  const now = new Date();
+  const monthKey = monthKeyFromDate(now);
+
+  return runTransaction(db, async (transaction: any) => {
+    const employeeRef = doc(db, 'users', params.employeeId);
+    const employeeSnap = await transaction.get(employeeRef);
+    if (!employeeSnap.exists() || employeeSnap.data()?.role !== 'employee') {
+      throw new Error('Karyawan tidak ditemukan');
+    }
+
+    const currentBonusRaw = employeeSnap.data()?.bonus;
+    const currentBonus = typeof currentBonusRaw === 'number' ? currentBonusRaw : 0;
+    if (currentBonus < amountRounded) {
+      throw new Error('Bonus tidak mencukupi untuk penarikan');
+    }
+
+    const withdrawalRef = doc(collection(db, EMPLOYEE_WITHDRAWALS_COLLECTION));
+    const employeeName = employeeSnap.data()?.name || employeeSnap.data()?.email || params.employeeId;
+
+    const record: EmployeeWithdrawalRecord = {
+      id: withdrawalRef.id,
+      employeeId: params.employeeId,
+      employeeName,
+      amount: amountRounded,
+      status: 'completed',
+      actorId: params.actorId,
+      actorName: params.actorName || 'Admin',
+      notes: params.notes || '',
+      monthKey,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+
+    transaction.set(withdrawalRef, record);
+    transaction.set(
+      employeeRef,
+      {
+        bonus: increment(-amountRounded),
+        updatedAt: serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    return withdrawalRef.id as string;
+  });
+}
+
+export async function fetchEmployeeWithdrawalsPage(params: {
+  employeeId?: string | null;
+  status?: EmployeeWithdrawalStatus | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  pageSize?: number;
+  cursor?: any;
+}) {
+  const pageSize = params.pageSize || 20;
+
+  const constraints: any[] = [];
+  if (params.employeeId) constraints.push(where('employeeId', '==', params.employeeId));
+  if (params.status) constraints.push(where('status', '==', params.status));
+  if (params.startDate) constraints.push(where('createdAt', '>=', params.startDate));
+  if (params.endDate) constraints.push(where('createdAt', '<=', params.endDate));
+
+  constraints.push(orderBy('createdAt', 'desc'));
+  if (params.cursor) constraints.push(startAfter(params.cursor));
+  constraints.push(limit(pageSize));
+
+  const q = query(collection(db, EMPLOYEE_WITHDRAWALS_COLLECTION), ...constraints);
+
+  const snapshot = await getDocs(q);
+  const items = snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() })) as EmployeeWithdrawalRecord[];
+  const nextCursor = snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+  return { items, nextCursor };
 }
 
 export async function getEmployees() {
@@ -302,7 +571,8 @@ export async function createEmployeeProfile(uid: string, name: string, email: st
     collected: 0,
     bonus: 0,
     internalDebt: 0,
-    active: true
+    active: true,
+    profitSharePercentage: 0
   };
   // Save to users collection
   await setDoc(doc(db, 'users', uid), {

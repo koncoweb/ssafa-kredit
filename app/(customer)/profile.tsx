@@ -1,30 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, RefreshControl } from 'react-native';
-import { Appbar, Text, Card, List, Button } from 'react-native-paper';
-import { useRouter } from 'expo-router';
+import { Text, Card, List, Button } from 'react-native-paper';
 import { useAuthStore } from '../../src/store/authStore';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { getCustomerData, CustomerData } from '../../src/services/firestore';
 
 export default function CustomerProfile() {
-  const router = useRouter();
   const { user, logout } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user) return;
+    if (user.role !== 'customer') {
+      setCustomerData(null);
+      return;
+    }
     try {
       const data = await getCustomerData(user.id);
       setCustomerData(data);
     } catch {
       setCustomerData(null);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     loadData();
-  }, [user]);
+  }, [loadData]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -54,13 +56,23 @@ export default function CustomerProfile() {
           </Card.Content>
         </Card>
 
-        <Card style={{ marginTop: 20 }} mode="elevated">
-          <Card.Content>
-            <Text variant="titleMedium">Kredit</Text>
-            <List.Item title="Limit Kredit" description={customerData ? formatCurrency(customerData.creditLimit) : '-'} left={props => <List.Icon {...props} icon="credit-card" />} />
-            <List.Item title="Total Tagihan" description={customerData ? formatCurrency(customerData.totalDebt) : '-'} left={props => <List.Icon {...props} icon="cash" />} />
-          </Card.Content>
-        </Card>
+        {user?.role === 'customer' ? (
+          <Card style={{ marginTop: 20 }} mode="elevated">
+            <Card.Content>
+              <Text variant="titleMedium">Kredit</Text>
+              <List.Item
+                title="Limit Kredit"
+                description={customerData ? formatCurrency(customerData.creditLimit) : '-'}
+                left={(props) => <List.Icon {...props} icon="credit-card" />}
+              />
+              <List.Item
+                title="Total Tagihan"
+                description={customerData ? formatCurrency(customerData.totalDebt) : '-'}
+                left={(props) => <List.Icon {...props} icon="cash" />}
+              />
+            </Card.Content>
+          </Card>
+        ) : null}
 
         <Button mode="contained-tonal" style={{ marginTop: 20 }} onPress={() => logout()}>
           Keluar
