@@ -1,27 +1,27 @@
-import React, { useEffect, useState } from 'react';
-import { View, ScrollView, RefreshControl } from 'react-native';
-import { Appbar, Text, Card, List } from 'react-native-paper';
-import { useAuthStore } from '../../src/store/authStore';
 import { useRouter } from 'expo-router';
-import { getCustomerData, getCustomerTransactions, CustomerData, Transaction } from '../../src/services/firestore';
+import React, { useEffect, useState } from 'react';
+import { RefreshControl, ScrollView, View } from 'react-native';
+import { Card, List, Text } from 'react-native-paper';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { ShortcutGrid } from '../../src/components/home/ShortcutGrid';
+import { CustomerData, getCustomerData, getCustomerTransactions, Transaction } from '../../src/services/firestore';
+import { useAuthStore } from '../../src/store/authStore';
 
 export default function CustomerDashboard() {
-  const { user, logout } = useAuthStore();
+  const { user } = useAuthStore();
   const router = useRouter();
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadData = async () => {
+  const loadData = React.useCallback(async () => {
     if (user?.id) {
       const data = await getCustomerData(user.id);
       setCustomerData(data);
       const txs = await getCustomerTransactions(user.id);
       setTransactions(txs);
     }
-  };
+  }, [user]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -31,7 +31,7 @@ export default function CustomerDashboard() {
 
   useEffect(() => {
     loadData();
-  }, [user]);
+  }, [loadData]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(amount);

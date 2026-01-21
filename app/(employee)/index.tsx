@@ -12,7 +12,7 @@ import { generateProfitSharesHistoryPDF } from '../../src/services/printService'
 import { logPrintActivity } from '../../src/services/firestore';
 
 export default function EmployeeDashboard() {
-  const { user, logout } = useAuthStore();
+  const { user } = useAuthStore();
   const router = useRouter();
   const [quickOpen, setQuickOpen] = useState(false);
   const [profitShares, setProfitShares] = useState<ProfitShareRecord[]>([]);

@@ -1,10 +1,10 @@
 import { Stack } from 'expo-router';
-import { PaperProvider } from 'react-native-paper';
+import { PaperProvider , Snackbar } from 'react-native-paper';
 import { theme } from '../src/constants/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
-import { Snackbar } from 'react-native-paper';
+
 import { initOffline, registerServiceWorker, subscribe } from '../src/services/offline';
 
 export default function RootLayout() {

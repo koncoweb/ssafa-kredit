@@ -1,23 +1,23 @@
-import { db } from './firebase';
-import { 
-  collection, 
-  doc, 
-  runTransaction, 
-  serverTimestamp,
-  Timestamp,
-  query,
-  where,
-  orderBy,
-  limit,
-  startAfter,
+import {
+  collection,
+  doc,
+  getDoc,
   getDocs,
   increment,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  runTransaction,
+  serverTimestamp,
   setDoc,
-  getDoc,
-  onSnapshot
+  startAfter,
+  Timestamp,
+  where
 } from 'firebase/firestore';
 import { Platform } from 'react-native';
-import { CreditTransaction, Installment, Product, Customer } from '../types';
+import { CreditTransaction, Customer, Installment, Product } from '../types';
+import { db } from './firebase';
 import { PRODUCTS_COLLECTION, STOCK_HISTORY_COLLECTION } from './productService';
 const CUSTOMERS_COLLECTION = 'customers';
 export const STATS_COLLECTION = 'stats';
@@ -186,8 +186,8 @@ export interface ProcessPaymentParams {
   collectorName?: string;
   paidAt?: Date;
   paymentMethod?: PaymentMethod;
-  paymentProofImage?: string;
-  paymentReference?: string;
+  paymentProofImage?: string | null;
+  paymentReference?: string | null;
 }
 
 export type PaymentMethod = 'cash' | 'transfer';
@@ -202,8 +202,8 @@ export interface PaymentTransaction {
   collectorId: string;
   collectorName?: string;
   paymentMethod: PaymentMethod;
-  paymentProofImage?: string;
-  paymentReference?: string;
+  paymentProofImage?: string | null;
+  paymentReference?: string | null;
   receiptNumber: string;
   createdAt: any;
   updatedAt: any;
@@ -297,8 +297,8 @@ export async function processPayment(params: ProcessPaymentParams): Promise<Proc
         collectorId,
         collectorName: collectorName || 'Unknown',
         paymentMethod,
-        paymentProofImage: params.paymentProofImage || undefined,
-        paymentReference: params.paymentReference || undefined,
+        paymentProofImage: params.paymentProofImage || null,
+        paymentReference: params.paymentReference || null,
         receiptNumber,
         createdAt: createdAtValue,
         updatedAt: updatedAtValue,
@@ -795,6 +795,37 @@ export async function diagnoseCustomerDebt(customerId: string) {
     console.error("Diagnosis failed:", error);
     throw error;
   }
+}
+
+export interface ImageUploadLog {
+    id: string;
+    uploaderId: string;
+    uploaderName: string;
+    action: 'upload' | 'camera_access' | 'error';
+    details: string;
+    timestamp: any;
+}
+
+export async function logImageUploadActivity(params: {
+    uploaderId: string;
+    uploaderName: string;
+    action: 'upload' | 'camera_access' | 'error';
+    details: string;
+}) {
+    try {
+        const logRef = doc(collection(db, 'image_upload_logs'));
+        const logData: ImageUploadLog = {
+            id: logRef.id,
+            uploaderId: params.uploaderId,
+            uploaderName: params.uploaderName,
+            action: params.action,
+            details: params.details,
+            timestamp: serverTimestamp()
+        };
+        await setDoc(logRef, logData);
+    } catch (error) {
+        console.error("Failed to log image upload activity:", error);
+    }
 }
 
 export async function analyzeSystemConsistency() {

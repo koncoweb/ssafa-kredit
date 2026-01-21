@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { User, UserRole } from '../types';
 import { loginEmailAuth, registerEmailAuth } from '../services/authSdk';
-import { getUserRole, setUserRole, createCustomerProfile, createEmployeeProfile, createAdminProfile } from '../services/firestore';
+import { createAdminProfile, createCustomerProfile, createEmployeeProfile, getUserRole } from '../services/firestore';
+import { User, UserRole } from '../types';
 
 interface AuthState {
   user: User | null;

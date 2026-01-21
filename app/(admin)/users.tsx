@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { View, Alert } from 'react-native';
-import { Appbar, Text, Searchbar, Card, Chip, Button, ActivityIndicator, Menu, Divider } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-import { getAllUsers, changeUserRole, UserDoc } from '../../src/services/firestore';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Card, Chip, Divider, Menu, Searchbar, Text } from 'react-native-paper';
+import { changeUserRole, getAllUsers, UserDoc } from '../../src/services/firestore';
 import { useAuthStore } from '../../src/store/authStore';
 
-const roles: Array<UserDoc['role']> = ['admin', 'employee', 'customer'];
+const roles: UserDoc['role'][] = ['admin', 'employee', 'customer'];
 
 export default function AdminUsersManagement() {
   const router = useRouter();
@@ -22,6 +22,7 @@ export default function AdminUsersManagement() {
       const data = await getAllUsers();
       setUsers(data);
     } catch (e) {
+      console.error(e);
       Alert.alert('Error', 'Gagal memuat data users');
     } finally {
       setLoading(false);

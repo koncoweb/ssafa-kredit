@@ -1,8 +1,8 @@
-import React from 'react';
-import { View, Image, TouchableOpacity } from 'react-native';
-import { Appbar, Text, Avatar, useTheme } from 'react-native-paper';
-import { useAuthStore } from '../../store/authStore';
 import { useRouter } from 'expo-router';
+import React from 'react';
+import { TouchableOpacity, View } from 'react-native';
+import { Appbar, Avatar, Text, useTheme } from 'react-native-paper';
+import { useAuthStore } from '../../store/authStore';
 
 interface Props {
   title?: string;

@@ -1,13 +1,13 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { ScrollView, View, Alert, TouchableOpacity, StyleSheet, FlatList, Image } from 'react-native';
-import { Appbar, Text, TextInput, Button, Card, Divider, Portal, Dialog, Searchbar, SegmentedButtons, ActivityIndicator, Chip, Checkbox } from 'react-native-paper';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, FlatList, Image, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Card, Checkbox, Chip, Dialog, Divider, Portal, Searchbar, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { CustomerData, getAllCustomers } from '../../src/services/firestore';
 import { generateAgreementPDF } from '../../src/services/printService';
-import { getAllCustomers, CustomerData } from '../../src/services/firestore';
-import { getProducts, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../src/services/productService';
-import { createCreditTransaction, processPayment, getCreditTransactionsReport } from '../../src/services/transactionService';
-import { Product, CreditSettings, Customer } from '../../src/types';
+import { calculateCreditPrice, calculateInstallment, getCreditSettings, getProducts } from '../../src/services/productService';
+import { createCreditTransaction, getCreditTransactionsReport, processPayment } from '../../src/services/transactionService';
 import { useAuthStore } from '../../src/store/authStore';
+import { CreditSettings, Product } from '../../src/types';
 
 const formatCurrency = (val: number) => {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
@@ -97,6 +97,7 @@ export default function CreditTransactionScreen() {
         officerName: user?.name || 'Petugas'
       });
     } catch (error) {
+      console.error(error);
       Alert.alert("Error", "Gagal mencetak dokumen");
     }
   };
@@ -143,6 +144,7 @@ export default function CreditTransactionScreen() {
         setNextDueAmount(minAmount);
         setNextDueLabel(label);
       } catch (e) {
+        console.error(e);
         setNextDueAmount(null);
         setNextDueLabel('');
       }

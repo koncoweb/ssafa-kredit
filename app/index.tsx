@@ -1,13 +1,12 @@
 import { Redirect } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import { useAuthStore } from '../src/store/authStore';
-import { useEffect, useState } from 'react';
-import React from 'react';
+
 import { View } from 'react-native';
-import { Button, Text } from 'react-native-paper';
-import { HomeHeader } from '../src/components/home/HomeHeader';
-import { ShortcutGrid } from '../src/components/home/ShortcutGrid';
 import { FullWidthProductSlider } from '../src/components/home/FullWidthProductSlider';
+import { HomeHeader } from '../src/components/home/HomeHeader';
 import { LimitCard } from '../src/components/home/LimitCard';
+import { ShortcutGrid } from '../src/components/home/ShortcutGrid';
 
 export default function Index() {
   const { isAuthenticated, user } = useAuthStore();

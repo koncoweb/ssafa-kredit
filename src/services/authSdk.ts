@@ -1,6 +1,6 @@
+import { deleteApp, getApps, initializeApp } from 'firebase/app';
+import { createUserWithEmailAndPassword, getAuth, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, firebaseConfig } from './firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
-import { initializeApp, getApp, getApps, deleteApp } from 'firebase/app';
 
 type AuthUser = { uid: string; email: string | null };
 

@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { View, ScrollView, Image, StyleSheet } from 'react-native';
-import { Appbar, Text, Button, ActivityIndicator, Divider, Chip, Surface, DataTable } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Product, CreditSettings } from '../../../src/types';
-import { getProduct, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../../src/services/productService';
+import React, { useEffect, useState } from 'react';
+import { Image, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Chip, DataTable, Divider, Surface, Text } from 'react-native-paper';
+import { calculateCreditPrice, calculateInstallment, getCreditSettings, getProduct } from '../../../src/services/productService';
+import { CreditSettings, Product } from '../../../src/types';
 
 export default function EmployeeProductDetailScreen() {
   const { id } = useLocalSearchParams();
@@ -12,11 +12,7 @@ export default function EmployeeProductDetailScreen() {
   const [settings, setSettings] = useState<CreditSettings | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadData();
-  }, [id]);
-
-  const loadData = async () => {
+  const loadData = React.useCallback(async () => {
     if (!id) return;
     try {
       const [productData, settingsData] = await Promise.all([
@@ -28,7 +24,11 @@ export default function EmployeeProductDetailScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);

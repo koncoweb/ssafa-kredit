@@ -1,13 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { ScrollView, View, Alert, RefreshControl, FlatList, TouchableOpacity, Image } from 'react-native';
-import { Appbar, Avatar, Text, FAB, Portal, Dialog, TextInput, Button, Card, Divider, ActivityIndicator, SegmentedButtons, Searchbar, IconButton } from 'react-native-paper';
-import { useRouter } from 'expo-router';
-import { fetchCustomersPage, searchCustomersPage, createCustomerProfile, CustomerData, updateCustomerProfile, logCustomerAccess, logPrintActivity } from '../../src/services/firestore';
-import { createSecondaryUser } from '../../src/services/authSdk';
-import { useAuthStore } from '../../src/store/authStore';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { fetchCustomerTransactionsPage, PaymentTransaction } from '../../src/services/transactionService';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, FlatList, Image, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Appbar, Avatar, Button, Card, Dialog, Divider, FAB, IconButton, Portal, Searchbar, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { createSecondaryUser } from '../../src/services/authSdk';
+import { createCustomerProfile, CustomerData, fetchCustomersPage, logCustomerAccess, logPrintActivity, searchCustomersPage, updateCustomerProfile } from '../../src/services/firestore';
 import { generatePaymentReceiptPDF, generatePaymentsHistoryPDF } from '../../src/services/printService';
+import { fetchCustomerTransactionsPage, PaymentTransaction } from '../../src/services/transactionService';
+import { useAuthStore } from '../../src/store/authStore';
 
 export default function EmployeeCustomersManagement() {
   const router = useRouter();
@@ -809,15 +809,17 @@ export default function EmployeeCustomersManagement() {
                             {tx.receiptNumber ? <Text variant="bodySmall">No: {tx.receiptNumber}</Text> : null}
                             {tx.notes ? <Text variant="bodySmall">Catatan: {tx.notes}</Text> : null}
                             {tx.paymentProofImage ? (
-                              <TouchableOpacity
+                              <Button
+                                mode="text"
                                 onPress={() => {
                                   setProofImage(tx.paymentProofImage || null);
                                   setProofDialogVisible(true);
                                 }}
-                                style={{ marginTop: 10 }}
+                                style={{ marginTop: 10, alignSelf: 'flex-start' }}
+                                textColor="#1E88E5"
                               >
-                                <Text style={{ color: '#1E88E5' }}>Lihat Bukti</Text>
-                              </TouchableOpacity>
+                                Lihat Bukti
+                              </Button>
                             ) : null}
                           </Card.Content>
                         </Card>

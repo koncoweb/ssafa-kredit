@@ -1,14 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ScrollView, View, Alert, RefreshControl, Platform } from 'react-native';
-import { Appbar, Avatar, Text, FAB, Portal, Dialog, TextInput, Button, Card, Divider, ActivityIndicator, Chip, SegmentedButtons, Menu, IconButton } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Platform, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Appbar, Avatar, Button, Card, Chip, Dialog, Divider, FAB, IconButton, Menu, Portal, SegmentedButtons, Text, TextInput } from 'react-native-paper';
 // import { GradientBackground } from '../../src/components/GradientBackground';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getEmployees, updateEmployee, createEmployeeProfile, EmployeeData, updateEmployeeProfitSharePercentage, createEmployeeWithdrawal, fetchEmployeeWithdrawalsPage, EmployeeWithdrawalRecord, logPrintActivity } from '../../src/services/firestore';
-import { fetchProfitSharesPage, ProfitShareRecord } from '../../src/services/transactionService';
 import { createSecondaryUser } from '../../src/services/authSdk';
-import { useAuthStore } from '../../src/store/authStore';
+import { createEmployeeProfile, createEmployeeWithdrawal, EmployeeData, EmployeeWithdrawalRecord, fetchEmployeeWithdrawalsPage, getEmployees, logPrintActivity, updateEmployee, updateEmployeeProfitSharePercentage } from '../../src/services/firestore';
 import { generateEmployeeWithdrawalReceiptPDF, generateEmployeeWithdrawalsHistoryPDF, generateProfitSharesHistoryPDF, shareCsv } from '../../src/services/printService';
+import { fetchProfitSharesPage, ProfitShareRecord } from '../../src/services/transactionService';
+import { useAuthStore } from '../../src/store/authStore';
 
 export default function EmployeesManagement() {
   const router = useRouter();
@@ -91,6 +91,7 @@ export default function EmployeesManagement() {
       setVisible(false);
       loadEmployees();
     } catch (error) {
+      console.error(error);
       Alert.alert('Error', 'Gagal menyimpan perubahan');
     } finally {
       setSavingEdit(false);

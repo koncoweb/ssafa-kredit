@@ -1,22 +1,22 @@
-import { db } from './firebase';
-import { 
-  collection, 
-  doc, 
-  getDoc, 
-  getDocs, 
-  setDoc, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  query, 
-  where, 
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
   orderBy,
   limit as qLimit,
-  serverTimestamp,
+  query,
   runTransaction,
-  increment
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where
 } from 'firebase/firestore';
-import { Product, CreditSettings } from '../types';
+import { CreditSettings, Product, StockHistory } from '../types';
+import { db } from './firebase';
+
+
 
 export const PRODUCTS_COLLECTION = 'products';
 export const STOCK_HISTORY_COLLECTION = 'stock_history';
@@ -153,8 +153,6 @@ export async function updateProductStock(
     });
   });
 }
-
-import { StockHistory } from '../types';
 
 export async function getProductStockHistory(productId: string): Promise<StockHistory[]> {
   const q = query(

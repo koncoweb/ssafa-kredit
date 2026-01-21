@@ -1,15 +1,15 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { ScrollView, View, Alert, RefreshControl, FlatList, TouchableOpacity, Image } from 'react-native';
-import { Appbar, Avatar, Text, FAB, Portal, Dialog, TextInput, Button, Card, Divider, ActivityIndicator, SegmentedButtons, Searchbar, IconButton, Menu } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, FlatList, Image, RefreshControl, ScrollView, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Appbar, Avatar, Button, Card, Dialog, Divider, FAB, IconButton, Menu, Portal, Searchbar, SegmentedButtons, Text, TextInput } from 'react-native-paper';
 // import { GradientBackground } from '../../src/components/GradientBackground';
-import { fetchCustomersPage, searchCustomersPage, createCustomerProfile, CustomerData, updateCustomerProfile, logCustomerAccess, logPrintActivity } from '../../src/services/firestore';
-import { recalculateCustomerDebt, diagnoseCustomerDebt } from '../../src/services/transactionService';
-import { createSecondaryUser } from '../../src/services/authSdk';
-import { isOnline, enqueue } from '../../src/services/offline';
-import { useAuthStore } from '../../src/store/authStore';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { fetchCustomerTransactionsPage, PaymentTransaction } from '../../src/services/transactionService';
+import { createSecondaryUser } from '../../src/services/authSdk';
+import { createCustomerProfile, CustomerData, fetchCustomersPage, logCustomerAccess, logPrintActivity, searchCustomersPage, updateCustomerProfile } from '../../src/services/firestore';
+import { enqueue, isOnline } from '../../src/services/offline';
+import { diagnoseCustomerDebt, fetchCustomerTransactionsPage, PaymentTransaction, recalculateCustomerDebt } from '../../src/services/transactionService';
+import { useAuthStore } from '../../src/store/authStore';
+
 import { generatePaymentReceiptPDF, generatePaymentsHistoryPDF } from '../../src/services/printService';
 
 export default function CustomersManagement() {
@@ -236,6 +236,7 @@ export default function CustomersManagement() {
             ]
         );
     } catch (e) {
+        console.error(e);
         Alert.alert("Error", "Gagal menganalisis data utang");
     } finally {
         setLoadingAction(false);

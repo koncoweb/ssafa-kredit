@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
-import { Text, TextInput, Surface, Divider, SegmentedButtons, Chip } from 'react-native-paper';
-import { Product, CreditSettings } from '../../types';
+import { StyleSheet, View } from 'react-native';
+import { Chip, Divider, SegmentedButtons, Surface, Text, TextInput } from 'react-native-paper';
 import { calculateCreditPrice, calculateInstallment } from '../../services/productService';
+import { CreditSettings, Product } from '../../types';
 
 interface ProductSimulationProps {
   product: Product;
@@ -28,6 +28,7 @@ export default function ProductSimulation({ product, globalSettings }: ProductSi
       if (!currentTenors.includes(selectedTenor)) {
           setSelectedTenor(currentTenors[0]);
       }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [installType]);
 
   const installment = calculateInstallment(creditPrice, dpValue, selectedTenor);

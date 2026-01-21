@@ -1,10 +1,10 @@
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, View, StyleSheet, Alert, RefreshControl } from 'react-native';
-import { Appbar, Text, Card, Button, Menu, Divider, ActivityIndicator, Chip, ProgressBar, Badge } from 'react-native-paper';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { Alert, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Appbar, Badge, Button, Card, Chip, Divider, Menu, ProgressBar, Text } from 'react-native-paper';
 // import { GradientBackground } from '../../src/components/GradientBackground';
-import { getCreditTransactionsReport, getReceivablesMutationReport, getProfitSharesReport, ProfitShareRecord } from '../../src/services/transactionService';
-import { getAllCustomers, CustomerData, getEmployees, EmployeeData } from '../../src/services/firestore';
+import { CustomerData, EmployeeData, getAllCustomers, getEmployees } from '../../src/services/firestore';
+import { getCreditTransactionsReport, getProfitSharesReport, getReceivablesMutationReport, ProfitShareRecord } from '../../src/services/transactionService';
 import { CreditTransaction } from '../../src/types';
 
 export default function ReportsScreen() {
@@ -124,11 +124,11 @@ export default function ReportsScreen() {
     return cust ? cust.name : 'Unknown';
   };
 
-  const getEmployeeName = (id?: string) => {
+  const getEmployeeName = useCallback((id?: string) => {
     if (!id) return 'Unknown';
     const emp = employees.find(e => e.uid === id);
     return emp ? (emp.name || emp.email || emp.uid) : 'Unknown';
-  };
+  }, [employees]);
 
   const profitShareSummary = useMemo(() => {
     return profitShares.reduce((acc, r) => {
@@ -163,7 +163,7 @@ export default function ReportsScreen() {
       }
     });
     return Object.values(map).sort((a, b) => b.totalProfitShare - a.totalProfitShare);
-  }, [profitShares, employees]);
+  }, [profitShares, getEmployeeName]);
 
   const getInstallmentProgress = (tx: CreditTransaction) => {
     const installments = tx.installments || [];

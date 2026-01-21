@@ -148,6 +148,13 @@ service cloud.firestore {
       allow write: if isSignedIn() && ( isAdmin() || isEmployee() );
     }
 
+    // --- Image Upload Logs (Audit Trail Upload Gambar) ---
+    match /image_upload_logs/{logId} {
+      allow create: if isSignedIn() && ( isAdmin() || isEmployee() );
+      allow read: if isSignedIn() && isAdmin();
+      allow update, delete: if false;
+    }
+
     // --- Products (Data Barang Katalog) ---
     match /products/{productId} {
       // Public read access for catalog browsing; write remains restricted

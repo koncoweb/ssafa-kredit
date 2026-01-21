@@ -1,15 +1,14 @@
-import { db } from './firebase';
-import { 
-  collection, 
-  getDocs, 
-  query, 
-  where, 
-  orderBy, 
-  limit, 
-  startAt,
-  endAt
+import {
+  collection,
+  endAt,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  startAt
 } from 'firebase/firestore';
 import { Customer } from '../types';
+import { db } from './firebase';
 
 const CUSTOMERS_COLLECTION = 'customers';
 

@@ -446,7 +446,7 @@ export const generatePaymentsHistoryPDF = async (params: {
   title?: string;
   customerName: string;
   customerId: string;
-  items: Array<{
+  items: {
     id: string;
     receiptNumber?: string;
     createdAt: Date;
@@ -455,7 +455,7 @@ export const generatePaymentsHistoryPDF = async (params: {
     collectorName?: string;
     paymentReference?: string;
     notes?: string;
-  }>;
+  }[];
   startDate?: Date | null;
   endDate?: Date | null;
   officerName: string;
@@ -568,7 +568,7 @@ export const generatePaymentsHistoryPDF = async (params: {
 export const generateEmployeeWithdrawalsHistoryPDF = async (params: {
   title?: string;
   employeeName?: string;
-  items: Array<{
+  items: {
     id: string;
     employeeName: string;
     createdAt: Date;
@@ -576,7 +576,7 @@ export const generateEmployeeWithdrawalsHistoryPDF = async (params: {
     status: string;
     actorName?: string;
     notes?: string;
-  }>;
+  }[];
   startDate?: Date | null;
   endDate?: Date | null;
   officerName: string;
@@ -681,7 +681,7 @@ export const generateEmployeeWithdrawalsHistoryPDF = async (params: {
 export const generateProfitSharesHistoryPDF = async (params: {
   title?: string;
   employeeName?: string;
-  items: Array<{
+  items: {
     id: string;
     customerName: string;
     createdAt: Date;
@@ -691,7 +691,7 @@ export const generateProfitSharesHistoryPDF = async (params: {
     status: string;
     collectorName?: string;
     notes?: string;
-  }>;
+  }[];
   startDate?: Date | null;
   endDate?: Date | null;
   officerName: string;

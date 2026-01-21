@@ -1,14 +1,14 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { View, FlatList, RefreshControl, Alert, Image, TouchableOpacity, StyleSheet, ScrollView, Platform } from 'react-native';
-import { Appbar, ActivityIndicator, Text, FAB, Portal, Dialog, TextInput, Button, Searchbar, Chip, Menu, Divider, IconButton, SegmentedButtons, HelperText, Snackbar } from 'react-native-paper';
-import { useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Product } from '../../../src/types';
-import { getProducts, createProduct, updateProduct, deleteProduct, updateProductStock, getProductStockHistory } from '../../../src/services/productService';
+import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, FlatList, Image, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Chip, Dialog, Divider, FAB, IconButton, Menu, Portal, Searchbar, Snackbar, Text, TextInput } from 'react-native-paper';
 import ProductListItem from '../../../src/components/products/ProductListItem';
+import { createProduct, deleteProduct, getProducts, getProductStockHistory, updateProduct, updateProductStock } from '../../../src/services/productService';
 import { useAuthStore } from '../../../src/store/authStore';
-import { StockHistory } from '../../../src/types';
+import { Product, StockHistory } from '../../../src/types';
+
 
 const PRODUCT_CATEGORIES = [
   "Elektronik",
@@ -276,8 +276,11 @@ export default function AdminProductListScreen() {
             try {
               await deleteProduct(product.id);
               loadProducts();
-            } catch (e) {
-              Alert.alert('Error', 'Gagal menghapus produk');
+            } catch (error) {
+              console.error(error);
+              setSnackbarMessage('Gagal menghapus produk');
+              setSnackbarError(true);
+              setSnackbarVisible(true);
             }
           }
         }

@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { View, ScrollView, Image, StyleSheet, Alert } from 'react-native';
-import { Appbar, Text, Button, ActivityIndicator, Divider, Chip, Surface, DataTable, Portal, Dialog, TextInput, SegmentedButtons, List } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Product, CreditSettings } from '../../../src/types';
-import { getProduct, getCreditSettings, calculateCreditPrice, calculateInstallment } from '../../../src/services/productService';
-import { useAuthStore } from '../../../src/store/authStore';
+import React, { useEffect, useState } from 'react';
+import { Alert, Image, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Chip, DataTable, Dialog, Divider, List, Portal, SegmentedButtons, Surface, Text, TextInput } from 'react-native-paper';
 import { createCreditRequest, getCustomerData } from '../../../src/services/firestore';
 import { getQueue, isOnline, resolveQueuedItemData, syncAll, upsertQueuedItem } from '../../../src/services/offline';
+import { calculateCreditPrice, calculateInstallment, getCreditSettings, getProduct } from '../../../src/services/productService';
+import { useAuthStore } from '../../../src/store/authStore';
+import { CreditSettings, Product } from '../../../src/types';
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams();
@@ -28,11 +28,7 @@ export default function ProductDetailScreen() {
   const [downPayment, setDownPayment] = useState<string>('0');
   const [notes, setNotes] = useState<string>('');
 
-  useEffect(() => {
-    loadData();
-  }, [id]);
-
-  const loadData = async () => {
+  const loadData = React.useCallback(async () => {
     if (!id) return;
     try {
       const [productData, settingsData] = await Promise.all([
@@ -46,7 +42,11 @@ export default function ProductDetailScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);

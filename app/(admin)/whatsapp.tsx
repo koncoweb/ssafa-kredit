@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Alert, View } from 'react-native';
-import { Appbar, TextInput, Button, Card, Text, ActivityIndicator, HelperText } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Card, Text, TextInput } from 'react-native-paper';
 // import { GradientBackground } from '../../src/components/GradientBackground';
 import { getWATemplates, saveWATemplates, WATemplates } from '../../src/services/firestore';
 

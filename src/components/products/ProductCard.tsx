@@ -1,6 +1,6 @@
 import React from 'react';
-import { View, StyleSheet, Image } from 'react-native';
-import { Card, Text, Button, Chip } from 'react-native-paper';
+import { StyleSheet } from 'react-native';
+import { Card, Chip, Text } from 'react-native-paper';
 import { Product } from '../../types';
 
 interface ProductCardProps {

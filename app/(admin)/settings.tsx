@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, View, Alert } from 'react-native';
-import { Appbar, List, Button, Text, Divider, ActivityIndicator, Portal, Dialog, TextInput } from 'react-native-paper';
 import { useRouter } from 'expo-router';
-import { useAuthStore } from '../../src/store/authStore';
-import { getUserRole, setUserRole } from '../../src/services/firestore';
-import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
+import React, { useEffect, useState } from 'react';
+import { Alert, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Appbar, Button, Dialog, Divider, List, Portal, Text, TextInput } from 'react-native-paper';
 import { resetDatabase } from '../../src/services/adminService';
+import { getUserRole, setUserRole } from '../../src/services/firestore';
 import { getLogs, getQueue, isOnline, OfflineItem, OfflineLogEntry, syncAll } from '../../src/services/offline';
+import { getCreditSettings, saveCreditSettings } from '../../src/services/productService';
+import { useAuthStore } from '../../src/store/authStore';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -36,13 +36,7 @@ export default function SettingsPage() {
   const [offlineLogs, setOfflineLogs] = useState<OfflineLogEntry[]>([]);
   const [loadingOffline, setLoadingOffline] = useState(false);
 
-  useEffect(() => {
-    checkRole();
-    loadCreditSettings();
-    loadOfflineViewer();
-  }, []);
-
-  const loadOfflineViewer = async () => {
+  const loadOfflineViewer = React.useCallback(async () => {
     setLoadingOffline(true);
     try {
       const [q, l] = await Promise.all([getQueue(), getLogs()]);
@@ -51,19 +45,20 @@ export default function SettingsPage() {
     } finally {
       setLoadingOffline(false);
     }
-  };
+  }, []);
 
-  const checkRole = async () => {
+  const checkRole = React.useCallback(async () => {
     if (!user?.id) return;
     try {
       const role = await getUserRole(user.id);
       setRoleStatus(role || 'not_found');
     } catch (error) {
+      console.error(error);
       setRoleStatus('error');
     }
-  };
+  }, [user]);
 
-  const loadCreditSettings = async () => {
+  const loadCreditSettings = React.useCallback(async () => {
     try {
         const settings = await getCreditSettings();
         setCreditSettings({
@@ -75,7 +70,13 @@ export default function SettingsPage() {
             }
         });
     } catch(e) { console.error(e); }
-  };
+  }, []);
+
+  useEffect(() => {
+    checkRole();
+    loadCreditSettings();
+    loadOfflineViewer();
+  }, [checkRole, loadCreditSettings, loadOfflineViewer]);
 
   const handleSaveSettings = async () => {
     try {
@@ -92,6 +93,7 @@ export default function SettingsPage() {
         setShowSettingsDialog(false);
         Alert.alert('Sukses', 'Pengaturan kredit disimpan');
     } catch(e) {
+        console.error(e);
         Alert.alert('Gagal', 'Gagal menyimpan pengaturan');
     } finally {
         setLoadingSettings(false);

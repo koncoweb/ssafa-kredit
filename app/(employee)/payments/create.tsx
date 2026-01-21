@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, Image } from 'react-native';
-import { Text, TextInput, Button, Card, Avatar, ActivityIndicator, HelperText, useTheme, SegmentedButtons } from 'react-native-paper';
-import { useRouter } from 'expo-router';
-import { useAuthStore } from '../../../src/store/authStore';
-import { processPayment } from '../../../src/services/transactionService';
-import { searchCustomers, getCustomers } from '../../../src/services/customerService';
-import { Customer } from '../../../src/types';
-import { isOnline, enqueue } from '../../../src/services/offline';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Avatar, Button, Card, HelperText, SegmentedButtons, Text, TextInput, useTheme } from 'react-native-paper';
+import { getCustomers, searchCustomers } from '../../../src/services/customerService';
+import { enqueue, isOnline } from '../../../src/services/offline';
 import { generatePaymentReceiptPDF } from '../../../src/services/printService';
+import { logImageUploadActivity, processPayment } from '../../../src/services/transactionService';
+import { useAuthStore } from '../../../src/store/authStore';
+import { Customer } from '../../../src/types';
 
 export default function CreatePaymentScreen() {
   const theme = useTheme();
@@ -93,8 +93,14 @@ export default function CreatePaymentScreen() {
     }
 
     if (paymentMethod === 'transfer' && !paymentReference.trim() && !paymentProofImage) {
-      Alert.alert('Error', 'Untuk transfer, isi referensi atau upload bukti transaksi.');
-      return;
+      // Optional: Ask for confirmation if both reference and image are missing for transfer
+      // Alert.alert('Error', 'Untuk transfer, isi referensi atau upload bukti transaksi.');
+      // return;
+      // Change to soft warning if needed, but for now lets make it optional or keep as is.
+      // User request: "jadikan pengambilan gambar opsional"
+      // Let's assume this validation is too strict. 
+      // We will allow saving transfer without proof if user really wants to, but maybe warn them?
+      // Or simply remove the blocker.
     }
 
     if (!user) {
@@ -150,8 +156,8 @@ export default function CreatePaymentScreen() {
             collectorName: user.name,
             paidAt: paymentDate.getTime(),
             paymentMethod,
-            paymentProofImage: paymentProofImage || undefined,
-            paymentReference: paymentReference.trim() || undefined,
+            paymentProofImage: paymentProofImage || null,
+            paymentReference: paymentReference.trim() || null,
           },
           metadata: { userId: user.id, sensitive: true }
         });
@@ -165,21 +171,93 @@ export default function CreatePaymentScreen() {
     }
   };
 
-  const pickProofImage = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Izin Ditolak', 'Akses galeri dibutuhkan untuk upload bukti transaksi.');
-      return;
+  const pickProofImage = async (useCamera: boolean) => {
+    if (useCamera) {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Izin Ditolak', 'Akses kamera dibutuhkan untuk mengambil bukti transaksi.');
+        await logImageUploadActivity({
+            uploaderId: user?.id || 'unknown',
+            uploaderName: user?.name || 'unknown',
+            action: 'error',
+            details: 'Camera permission denied'
+        });
+        return;
+      }
+      
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.5,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets[0]?.base64) {
+        processImageSelection(result.assets[0].base64, 'camera');
+      }
+    } else {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Izin Ditolak', 'Akses galeri dibutuhkan untuk upload bukti transaksi.');
+        await logImageUploadActivity({
+            uploaderId: user?.id || 'unknown',
+            uploaderName: user?.name || 'unknown',
+            action: 'error',
+            details: 'Gallery permission denied'
+        });
+        return;
+      }
+      
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.5,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets[0]?.base64) {
+        processImageSelection(result.assets[0].base64, 'gallery');
+      }
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.6,
-      base64: true,
+  };
+
+  const processImageSelection = async (base64: string, source: 'camera' | 'gallery') => {
+    const sizeInBytes = base64.length * 0.75;
+    const sizeInKB = sizeInBytes / 1024;
+    
+    if (sizeInKB > 800) {
+        Alert.alert(
+            'Ukuran Gambar Terlalu Besar', 
+            `Ukuran gambar sekitar ${Math.round(sizeInKB)}KB. Batas maksimum adalah 800KB. Silakan ambil ulang dengan pencahayaan lebih baik atau crop lebih kecil.`
+        );
+        await logImageUploadActivity({
+            uploaderId: user?.id || 'unknown',
+            uploaderName: user?.name || 'unknown',
+            action: 'error',
+            details: `Image too large: ${Math.round(sizeInKB)}KB`
+        });
+        return;
+    }
+
+    setPaymentProofImage(`data:image/jpeg;base64,${base64}`);
+    await logImageUploadActivity({
+        uploaderId: user?.id || 'unknown',
+        uploaderName: user?.name || 'unknown',
+        action: 'upload',
+        details: `Image uploaded via ${source}, size: ${Math.round(sizeInKB)}KB`
     });
-    if (!result.canceled && result.assets[0]?.base64) {
-      setPaymentProofImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
-    }
+  };
+
+  const showImageOptions = () => {
+    Alert.alert(
+        'Upload Bukti Transaksi',
+        'Pilih sumber gambar',
+        [
+            { text: 'Kamera', onPress: () => pickProofImage(true) },
+            { text: 'Galeri', onPress: () => pickProofImage(false) },
+            { text: 'Batal', style: 'cancel' }
+        ]
+    );
   };
 
   return (
@@ -317,11 +395,14 @@ export default function CreatePaymentScreen() {
                    onChangeText={setPaymentReference}
                    style={styles.input}
                  />
-                 <TouchableOpacity onPress={pickProofImage} style={styles.proofBox}>
+                 <TouchableOpacity onPress={showImageOptions} style={styles.proofBox}>
                    {paymentProofImage ? (
                      <Image source={{ uri: paymentProofImage }} style={styles.proofImage} />
                    ) : (
-                     <Text style={{ color: '#666' }}>+ Upload Bukti Transfer</Text>
+                     <View style={{alignItems:'center'}}>
+                        <Text style={{ color: '#666', marginBottom: 4 }}>+ Upload Bukti Transfer</Text>
+                        <Text variant="labelSmall" style={{color:'#999'}}>Maks 800KB (JPG/PNG)</Text>
+                     </View>
                    )}
                  </TouchableOpacity>
                  {paymentProofImage ? (

@@ -1,6 +1,6 @@
 import React from 'react';
-import { View, StyleSheet, Image, TouchableOpacity } from 'react-native';
-import { Text, Surface, IconButton, Chip, Divider } from 'react-native-paper';
+import { Image, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Chip, IconButton, Surface, Text } from 'react-native-paper';
 import { Product } from '../../types';
 
 interface ProductListItemProps {
