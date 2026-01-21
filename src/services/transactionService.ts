@@ -297,6 +297,7 @@ export async function processPayment(params: ProcessPaymentParams): Promise<Proc
         collectorId,
         collectorName: collectorName || 'Unknown',
         paymentMethod,
+        // Ensure null instead of undefined to satisfy Firestore constraints
         paymentProofImage: params.paymentProofImage || null,
         paymentReference: params.paymentReference || null,
         receiptNumber,

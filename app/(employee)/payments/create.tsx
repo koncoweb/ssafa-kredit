@@ -120,8 +120,8 @@ export default function CreatePaymentScreen() {
           collectorName: user.name,
           paidAt: paymentDate,
           paymentMethod,
-          paymentProofImage: paymentProofImage || undefined,
-          paymentReference: paymentReference.trim() || undefined,
+          paymentProofImage: paymentProofImage || null,
+          paymentReference: paymentReference.trim() || null,
         });
         try {
           await generatePaymentReceiptPDF({
